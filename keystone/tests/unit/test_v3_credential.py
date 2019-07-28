@@ -20,8 +20,9 @@ from keystoneclient.contrib.ec2 import utils as ec2_utils
 from six.moves import http_client
 from testtools import matchers
 
+from keystone.api import ec2tokens
+from keystone.common import provider_api
 from keystone.common import utils
-from keystone.contrib.ec2 import controllers
 from keystone.credential.providers import fernet as credential_fernet
 from keystone import exception
 from keystone.tests import unit
@@ -29,7 +30,8 @@ from keystone.tests.unit import ksfixtures
 from keystone.tests.unit import test_v3
 
 
-CRED_TYPE_EC2 = controllers.CRED_TYPE_EC2
+PROVIDERS = provider_api.ProviderAPIs
+CRED_TYPE_EC2 = ec2tokens.CRED_TYPE_EC2
 
 
 class CredentialBaseTestCase(test_v3.RestfulTestCase):
@@ -55,7 +57,7 @@ class CredentialBaseTestCase(test_v3.RestfulTestCase):
         credential_id = credential['id']
 
         # Create direct via the DB API to avoid validation failure
-        self.credential_api.create_credential(credential_id, credential)
+        PROVIDERS.credential_api.create_credential(credential_id, credential)
 
         return json.dumps(blob), credential_id
 
@@ -70,24 +72,26 @@ class CredentialTestCase(CredentialBaseTestCase):
         self.credential = unit.new_credential_ref(user_id=self.user['id'],
                                                   project_id=self.project_id)
 
-        self.credential_api.create_credential(
+        PROVIDERS.credential_api.create_credential(
             self.credential['id'],
             self.credential)
 
     def test_credential_api_delete_credentials_for_project(self):
-        self.credential_api.delete_credentials_for_project(self.project_id)
+        PROVIDERS.credential_api.delete_credentials_for_project(
+            self.project_id
+        )
         # Test that the credential that we created in .setUp no longer exists
         # once we delete all credentials for self.project_id
         self.assertRaises(exception.CredentialNotFound,
-                          self.credential_api.get_credential,
+                          PROVIDERS.credential_api.get_credential,
                           credential_id=self.credential['id'])
 
     def test_credential_api_delete_credentials_for_user(self):
-        self.credential_api.delete_credentials_for_user(self.user_id)
+        PROVIDERS.credential_api.delete_credentials_for_user(self.user_id)
         # Test that the credential that we created in .setUp no longer exists
         # once we delete all credentials for self.user_id
         self.assertRaises(exception.CredentialNotFound,
-                          self.credential_api.get_credential,
+                          PROVIDERS.credential_api.get_credential,
                           credential_id=self.credential['id'])
 
     def test_list_credentials(self):
@@ -98,7 +102,9 @@ class CredentialTestCase(CredentialBaseTestCase):
     def test_list_credentials_filtered_by_user_id(self):
         """Call ``GET  /credentials?user_id={user_id}``."""
         credential = unit.new_credential_ref(user_id=uuid.uuid4().hex)
-        self.credential_api.create_credential(credential['id'], credential)
+        PROVIDERS.credential_api.create_credential(
+            credential['id'], credential
+        )
 
         r = self.get('/credentials?user_id=%s' % self.user['id'])
         self.assertValidCredentialListResponse(r, ref=self.credential)
@@ -107,24 +113,29 @@ class CredentialTestCase(CredentialBaseTestCase):
 
     def test_list_credentials_filtered_by_type(self):
         """Call ``GET  /credentials?type={type}``."""
+        PROVIDERS.assignment_api.create_system_grant_for_user(
+            self.user_id, self.role_id
+        )
+        token = self.get_system_scoped_token()
+
         # The type ec2 was chosen, instead of a random string,
         # because the type must be in the list of supported types
         ec2_credential = unit.new_credential_ref(user_id=uuid.uuid4().hex,
                                                  project_id=self.project_id,
                                                  type=CRED_TYPE_EC2)
 
-        ec2_resp = self.credential_api.create_credential(
+        ec2_resp = PROVIDERS.credential_api.create_credential(
             ec2_credential['id'], ec2_credential)
 
         # The type cert was chosen for the same reason as ec2
-        r = self.get('/credentials?type=cert')
+        r = self.get('/credentials?type=cert', token=token)
 
         # Testing the filter for two different types
         self.assertValidCredentialListResponse(r, ref=self.credential)
         for cred in r.result['credentials']:
             self.assertEqual('cert', cred['type'])
 
-        r_ec2 = self.get('/credentials?type=ec2')
+        r_ec2 = self.get('/credentials?type=ec2', token=token)
         self.assertThat(r_ec2.result['credentials'], matchers.HasLength(1))
         cred_ec2 = r_ec2.result['credentials'][0]
 
@@ -137,20 +148,27 @@ class CredentialTestCase(CredentialBaseTestCase):
         user1_id = uuid.uuid4().hex
         user2_id = uuid.uuid4().hex
 
+        PROVIDERS.assignment_api.create_system_grant_for_user(
+            self.user_id, self.role_id
+        )
+        token = self.get_system_scoped_token()
+
         # Creating credentials for two different users
         credential_user1_ec2 = unit.new_credential_ref(user_id=user1_id,
                                                        type=CRED_TYPE_EC2)
         credential_user1_cert = unit.new_credential_ref(user_id=user1_id)
         credential_user2_cert = unit.new_credential_ref(user_id=user2_id)
 
-        self.credential_api.create_credential(
+        PROVIDERS.credential_api.create_credential(
             credential_user1_ec2['id'], credential_user1_ec2)
-        self.credential_api.create_credential(
+        PROVIDERS.credential_api.create_credential(
             credential_user1_cert['id'], credential_user1_cert)
-        self.credential_api.create_credential(
+        PROVIDERS.credential_api.create_credential(
             credential_user2_cert['id'], credential_user2_cert)
 
-        r = self.get('/credentials?user_id=%s&type=ec2' % user1_id)
+        r = self.get(
+            '/credentials?user_id=%s&type=ec2' % user1_id, token=token
+        )
         self.assertValidCredentialListResponse(r, ref=credential_user1_ec2)
         self.assertThat(r.result['credentials'], matchers.HasLength(1))
         cred = r.result['credentials'][0]
@@ -349,7 +367,9 @@ class TestCredentialTrustScoped(test_v3.RestfulTestCase):
 
         self.trustee_user = unit.new_user_ref(domain_id=self.domain_id)
         password = self.trustee_user['password']
-        self.trustee_user = self.identity_api.create_user(self.trustee_user)
+        self.trustee_user = PROVIDERS.identity_api.create_user(
+            self.trustee_user
+        )
         self.trustee_user['password'] = password
         self.trustee_user_id = self.trustee_user['id']
         self.useFixture(
@@ -362,7 +382,7 @@ class TestCredentialTrustScoped(test_v3.RestfulTestCase):
 
     def config_overrides(self):
         super(TestCredentialTrustScoped, self).config_overrides()
-        self.config_fixture.config(group='trust', enabled=True)
+        self.config_fixture.config(group='trust')
 
     def test_trust_scoped_ec2_credential(self):
         """Test creating trust scoped ec2 credential.
@@ -505,7 +525,7 @@ class TestCredentialEc2(CredentialBaseTestCase):
             user_id=self.user_id,
             project_id=self.project_id)
         non_ec2_cred['id'] = cred_id
-        self.credential_api.create_credential(cred_id, non_ec2_cred)
+        PROVIDERS.credential_api.create_credential(cred_id, non_ec2_cred)
         uri = '/'.join([self._get_ec2_cred_uri(), access_key])
         # if access_key is not found, ec2 controller raises Unauthorized
         # exception
@@ -526,8 +546,9 @@ class TestCredentialEc2(CredentialBaseTestCase):
             user_id=self.user_id,
             project_id=self.project_id)
         non_ec2_cred['type'] = uuid.uuid4().hex
-        self.credential_api.create_credential(non_ec2_cred['id'],
-                                              non_ec2_cred)
+        PROVIDERS.credential_api.create_credential(
+            non_ec2_cred['id'], non_ec2_cred
+        )
         r = self.get(uri)
         cred_list_2 = r.result['credentials']
         # still one element because non-EC2 credentials are not returned.
@@ -539,10 +560,10 @@ class TestCredentialEc2(CredentialBaseTestCase):
         ec2_cred = self._get_ec2_cred()
         uri = '/'.join([self._get_ec2_cred_uri(), ec2_cred['access']])
         cred_from_credential_api = (
-            self.credential_api
+            PROVIDERS.credential_api
             .list_credentials_for_user(self.user_id, type=CRED_TYPE_EC2))
         self.assertEqual(1, len(cred_from_credential_api))
         self.delete(uri)
         self.assertRaises(exception.CredentialNotFound,
-                          self.credential_api.get_credential,
+                          PROVIDERS.credential_api.get_credential,
                           cred_from_credential_api[0]['id'])

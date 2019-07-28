@@ -6,18 +6,18 @@
 # Andreas Jaeger <jaegerandi@gmail.com>, 2016. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: keystone 12.0.0.0b4.dev8\n"
+"Project-Id-Version: keystone VERSION\n"
 "Report-Msgid-Bugs-To: https://bugs.launchpad.net/openstack-i18n/\n"
-"POT-Creation-Date: 2017-08-01 22:35+0000\n"
+"POT-Creation-Date: 2018-08-08 22:57+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "PO-Revision-Date: 2016-04-07 06:28+0000\n"
 "Last-Translator: Copied by Zanata <copied-by-zanata@zanata.org>\n"
-"Language: zh-TW\n"
+"Language: zh_TW\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 "Generated-By: Babel 2.0\n"
-"X-Generator: Zanata 3.9.6\n"
+"X-Generator: Zanata 4.3.3\n"
 "Language-Team: Chinese (Taiwan)\n"
 
 #, python-format
@@ -139,23 +139,6 @@ msgstr "無法變更使用者 ID"
 msgid "Cannot change user name"
 msgstr "無法變更使用者名稱"
 
-#, python-format
-msgid ""
-"Cannot create project, since it specifies its owner as domain %(domain_id)s, "
-"but specifies a parent in a different domain (%(parent_domain_id)s)."
-msgstr ""
-"無法建立專案，因為它指定自己的擁有者作為網域 %(domain_id)s，但卻指定了位於不"
-"同網域 (%(parent_domain_id)s) 中的母項。"
-
-#, python-format
-msgid ""
-"Cannot create project, since its parent (%(domain_id)s) is acting as a "
-"domain, but project's specified parent_id (%(parent_id)s) does not match "
-"this domain_id."
-msgstr ""
-"無法建立專案，因為它的母項 (%(domain_id)s) 正在充當網域，但專案的指定 "
-"parent_id (%(parent_id)s) 與此 domain_id 不符。"
-
 msgid "Cannot delete a domain that is enabled, please disable it first."
 msgstr "無法刪除已啟用的網域，請先停用該網域。"
 
@@ -261,27 +244,12 @@ msgstr ""
 msgid "Could not validate the access token"
 msgstr "無法驗證存取記號"
 
-msgid "Credential belongs to another user"
-msgstr "認證屬於另一個使用者"
-
 msgid "Credential signature mismatch"
 msgstr "認證簽章不符"
-
-#, python-format
-msgid ""
-"Direct import of auth plugin %(name)r is deprecated as of Liberty in favor "
-"of its entrypoint from %(namespace)r and may be removed in N."
-msgstr ""
-"不建議直接匯入鑑別外掛程式 %(name)r，因為 Liberty 支援它在 %(namespace)r 中的"
-"進入點且可能在 N 中予以移除。"
 
 msgid ""
 "Disabling an entity where the 'enable' attribute is ignored by configuration."
 msgstr "正在停用配置已忽略其 'enable' 屬性的實體。"
-
-#, python-format
-msgid "Domain (%s)"
-msgstr "網域 (%s)"
 
 #, python-format
 msgid "Domain cannot be named %s"
@@ -386,9 +354,6 @@ msgid ""
 msgstr ""
 "欄位 \"remaining_uses\" 設定為 %(value)s，但為了重新委派信任，不能設定該欄位"
 
-msgid "Found invalid token: scoped to both project and domain."
-msgstr "找到無效記號：已將範圍限定為專案及網域。"
-
 #, python-format
 msgid "Group %(group)s is not supported for domain specific configurations"
 msgstr "網域特定配置不支援群組 %(group)s"
@@ -434,10 +399,6 @@ msgstr "無效的 LDAP 範圍：%(scope)s。請選擇 %(options)s 的其中之�
 msgid "Invalid TLS / LDAPS combination"
 msgstr "無效的 TLS/LDAPS 組合"
 
-#, python-format
-msgid "Invalid audit info data type: %(data)s (%(type)s)"
-msgstr "審核資訊資料類型無效：%(data)s (%(type)s)"
-
 msgid "Invalid blob in credential"
 msgstr "認證中的二進位大型物件無效"
 
@@ -447,9 +408,6 @@ msgid ""
 "ignoring this file."
 msgstr ""
 "在配置檔名稱 %(file)s 中找到的網域名稱 %(domain)s 無效 - 正在忽略此檔案。"
-
-msgid "Invalid limit value"
-msgstr "無效的限制值"
 
 #, python-format
 msgid ""
@@ -484,9 +442,6 @@ msgstr ""
 #, python-format
 msgid "Malformed endpoint URL (%(endpoint)s), see ERROR log for details."
 msgstr "端點 URL (%(endpoint)s) 的格式不正確，請參閱錯誤日誌以取得詳細資料。"
-
-msgid "Marker could not be found"
-msgstr "找不到標記"
 
 #, python-format
 msgid "Max hierarchy depth reached for %s branch."
@@ -534,9 +489,6 @@ msgstr "沒有原則與端點 %(endpoint_id)s 相關聯。"
 msgid "No token in the request"
 msgstr "要求中沒有記號"
 
-msgid "Non-default domain is not supported"
-msgstr "不支援非預設網域"
-
 msgid "One of the trust agents is disabled or deleted"
 msgstr "已停用或刪除其中一個信任代理程式"
 
@@ -551,10 +503,6 @@ msgid ""
 "Option %(option)s in group %(group)s is not supported for domain specific "
 "configurations"
 msgstr "網域特定配置不支援群組 %(group)s 中的選項 %(option)s"
-
-#, python-format
-msgid "Project (%s)"
-msgstr "專案 (%s)"
 
 msgid "Project field is required and cannot be empty."
 msgstr "專案欄位是必要的，不能是空的。"
@@ -583,15 +531,6 @@ msgid ""
 "of [0..%(max_count)d]"
 msgstr ""
 "剩餘的重新委派深度 %(redelegation_depth)d 超出容許的範圍 [0..%(max_count)d]"
-
-#, python-format
-msgid ""
-"Request attribute %(attribute)s must be less than or equal to %(size)i. The "
-"server could not comply with the request because the attribute size is "
-"invalid (too large). The client is assumed to be in error."
-msgstr ""
-"要求屬性 %(attribute)s 必須少於或等於 %(size)i。伺服器無法遵守要求，因為屬性"
-"大小無效（太大）。系統會假定用戶端處於錯誤狀態。"
 
 msgid "Request must have an origin query parameter"
 msgstr "要求必須具有原始查詢參數"
@@ -639,9 +578,6 @@ msgstr "指定網域或專案"
 msgid "Specify one of user or group"
 msgstr "指定使用者或群組"
 
-msgid "Tenant name cannot contain reserved characters."
-msgstr "租戶名稱不能包含保留字元。"
-
 msgid ""
 "The 'expires_at' must not be before now. The server could not comply with "
 "the request since it is either malformed or otherwise incorrect. The client "
@@ -666,9 +602,6 @@ msgstr ""
 
 msgid "The action you have requested has not been implemented."
 msgstr "尚未實作所要求的動作。"
-
-msgid "The configured token provider does not support bind authentication."
-msgstr "所配置的記號提供者不支援連結鑑別。"
 
 #, python-format
 msgid ""
@@ -716,9 +649,6 @@ msgid ""
 msgstr ""
 "時間戳記的格式不符合預期。伺服器無法遵守要求，因為它的格式不正確。系統會假定"
 "用戶端處於錯誤狀態。"
-
-msgid "Token belongs to another user"
-msgstr "記號屬於另一個使用者"
 
 msgid "Token version is unrecognizable or unsupported."
 msgstr "無法辨識或不支援記號版本。"
@@ -789,9 +719,6 @@ msgstr "發現非預期的指派類型：%s"
 msgid "Unexpected status requested for JSON Home response, %s"
 msgstr "針對「JSON 起始目錄」回應要求了非預期狀態 %s"
 
-msgid "Unknown Target"
-msgstr "不明的目標"
-
 #, python-format
 msgid "Unknown domain '%(name)s' specified by --domain-name"
 msgstr "由 --domain-name 指定的網域 '%(name)s' 不明"
@@ -848,9 +775,6 @@ msgstr "使用者不是受託人。"
 msgid "User not valid for tenant."
 msgstr "使用者不是有效的承租人。"
 
-msgid "User roles not supported: tenant_id required"
-msgstr "使用者角色不受支援：需要 tenant_id"
-
 #, python-format
 msgid "User type %s not supported"
 msgstr "使用者類型 %s 不受支援"
@@ -890,10 +814,6 @@ msgid "group %(group)s"
 msgstr "群組 %(group)s"
 
 #, python-format
-msgid "invalid date format %s"
-msgstr "無效的日期格式 %s"
-
-#, python-format
 msgid ""
 "it is not permitted to have two projects acting as domains with the same "
 "name: %s"
@@ -931,7 +851,3 @@ msgstr "tls_cacertdir %s 找不到，或者不是目錄"
 #, python-format
 msgid "tls_cacertfile %s not found or is not a file"
 msgstr "tls_cacertfile %s 找不到，或者不是檔案"
-
-#, python-format
-msgid "token reference must be a KeystoneToken type, got: %s"
-msgstr "記號參照必須是 KeystoneToken 類型，但卻取得：%s"

@@ -16,7 +16,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import calendar
 import collections
 import grp
 import hashlib
@@ -45,7 +44,7 @@ WHITELISTED_PROPERTIES = [
     'tenant_id', 'project_id', 'user_id',
     'public_bind_host', 'admin_bind_host',
     'compute_host', 'admin_port', 'public_port',
-    'public_endpoint', 'admin_endpoint', ]
+    'public_endpoint', ]
 
 
 # NOTE(stevermar): This UUID must stay the same, forever, across
@@ -95,8 +94,8 @@ class SmarterEncoder(jsonutils.json.JSONEncoder):
     """Help for JSON encoding dict-like objects."""
 
     def default(self, obj):
-        if not isinstance(obj, dict) and hasattr(obj, 'iteritems'):
-            return dict(obj.iteritems())
+        if not isinstance(obj, dict) and hasattr(obj, 'items'):
+            return dict(obj.items())
         return super(SmarterEncoder, self).default(obj)
 
 
@@ -118,65 +117,6 @@ def attr_as_boolean(val_attr):
 
     """
     return strutils.bool_from_string(val_attr, default=True)
-
-
-def remove_duplicate_dicts_by_id(item_list):
-    """Return a list with duplicate items removed.
-
-    This compares duplicates based on item id. This is to account
-    for dictionaries of items that can contain values, such as a
-    list of tags, that will not be guaranteed to be in order.
-
-    :param item_list: a list of dictionaries
-    :returns: a list of unique dictionaries
-
-    """
-    unique = {}
-    for i in item_list:
-        unique[i['id']] = i
-    return list(unique.values())
-
-
-def get_blob_from_credential(credential):
-    try:
-        blob = jsonutils.loads(credential.blob)
-    except (ValueError, TypeError):
-        raise exception.ValidationError(
-            message=_('Invalid blob in credential'))
-    if not blob or not isinstance(blob, dict):
-        raise exception.ValidationError(attribute='blob',
-                                        target='credential')
-    return blob
-
-
-def convert_ec2_to_v3_credential(ec2credential):
-    blob = {'access': ec2credential.access,
-            'secret': ec2credential.secret}
-    return {'id': hash_access_key(ec2credential.access),
-            'user_id': ec2credential.user_id,
-            'project_id': ec2credential.tenant_id,
-            'blob': jsonutils.dumps(blob),
-            'type': 'ec2',
-            'extra': jsonutils.dumps({})}
-
-
-def convert_v3_to_ec2_credential(credential):
-    blob = get_blob_from_credential(credential)
-    return {'access': blob.get('access'),
-            'secret': blob.get('secret'),
-            'user_id': credential.user_id,
-            'tenant_id': credential.project_id,
-            }
-
-
-def unixtime(dt_obj):
-    """Format datetime object as unix timestamp.
-
-    :param dt_obj: datetime.datetime object
-    :returns: float
-
-    """
-    return calendar.timegm(dt_obj.utctimetuple())
 
 
 def auth_str_equal(provided, known):
@@ -341,109 +281,6 @@ def get_unix_group(group=None):
     return group_info.gr_gid, group_info.gr_name
 
 
-def set_permissions(path, mode=None, user=None, group=None, log=None):
-    """Set the ownership and permissions on the pathname.
-
-    Each of the mode, user and group are optional, if None then
-    that aspect is not modified.
-
-    Owner and group may be specified either with a symbolic name
-    or numeric id.
-
-    :param string path: Pathname of directory whose existence is assured.
-    :param object mode: ownership permissions flags (int) i.e. chmod,
-                        if None do not set.
-    :param object user: set user, name (string) or uid (integer),
-                         if None do not set.
-    :param object group: set group, name (string) or gid (integer)
-                         if None do not set.
-    :param logger log: logging.logger object, used to emit log messages,
-                       if None no logging is performed.
-
-    """
-    if user is None:
-        user_uid, user_name = None, None
-    else:
-        user_uid, user_name = get_unix_user(user)
-
-    if group is None:
-        group_gid, group_name = None, None
-    else:
-        group_gid, group_name = get_unix_group(group)
-
-    if log:
-        if mode is None:
-            mode_string = str(mode)
-        else:
-            mode_string = oct(mode)
-        log.debug("set_permissions: "
-                  "path='%s' mode=%s user=%s(%s) group=%s(%s)",
-                  path, mode_string,
-                  user_name, user_uid, group_name, group_gid)
-
-    # Change user and group if specified
-    if user_uid is not None or group_gid is not None:
-        if user_uid is None:
-            user_uid = -1
-        if group_gid is None:
-            group_gid = -1
-        try:
-            os.chown(path, user_uid, group_gid)
-        except OSError as exc:
-            raise EnvironmentError("chown('%s', %s, %s): %s" %
-                                   (path,
-                                    user_name, group_name,
-                                    exc.strerror))
-
-    # Change permission flags
-    if mode is not None:
-        try:
-            os.chmod(path, mode)
-        except OSError as exc:
-            raise EnvironmentError("chmod('%s', %#o): %s" %
-                                   (path, mode, exc.strerror))
-
-
-def make_dirs(path, mode=None, user=None, group=None, log=None):
-    """Assure directory exists, set ownership and permissions.
-
-    Assure the directory exists and optionally set its ownership
-    and permissions.
-
-    Each of the mode, user and group are optional, if None then
-    that aspect is not modified.
-
-    Owner and group may be specified either with a symbolic name
-    or numeric id.
-
-    :param string path: Pathname of directory whose existence is assured.
-    :param object mode: ownership permissions flags (int) i.e. chmod,
-                        if None do not set.
-    :param object user: set user, name (string) or uid (integer),
-                        if None do not set.
-    :param object group: set group, name (string) or gid (integer)
-                         if None do not set.
-    :param logger log: logging.logger object, used to emit log messages,
-                       if None no logging is performed.
-
-    """
-    if log:
-        if mode is None:
-            mode_string = str(mode)
-        else:
-            mode_string = oct(mode)
-        log.debug("make_dirs path='%s' mode=%s user=%s group=%s",
-                  path, mode_string, user, group)
-
-    if not os.path.exists(path):
-        try:
-            os.makedirs(path)
-        except OSError as exc:
-            raise EnvironmentError("makedirs('%s'): %s" % (path, exc.strerror))
-
-    set_permissions(path, mode, user, group, log)
-
-
 class WhiteListedItemFilter(object):
 
     def __init__(self, whitelist, data):
@@ -498,8 +335,21 @@ def isotime(at=None, subsecond=False):
                      if not subsecond
                      else _ISO8601_TIME_FORMAT_SUBSECOND)
     tz = at.tzinfo.tzname(None) if at.tzinfo else 'UTC'
-    st += ('Z' if tz == 'UTC' else tz)
+    # Need to handle either iso8601 or python UTC format
+    st += ('Z' if tz in ['UTC', 'UTC+00:00'] else tz)
     return st
+
+
+def parse_expiration_date(expiration_date):
+    if not expiration_date.endswith('Z'):
+        expiration_date += 'Z'
+    try:
+        expiration_time = timeutils.parse_isotime(expiration_date)
+    except ValueError:
+        raise exception.ValidationTimeStampError()
+    if timeutils.is_older_than(expiration_time, 0):
+        raise exception.ValidationExpirationError()
+    return expiration_time
 
 
 URL_RESERVED_CHARS = ":/?#[]@!$&'()*+,;="
@@ -606,4 +456,38 @@ def check_endpoint_url(url):
     try:
         url.replace('$(', '%(') % substitutions
     except (KeyError, TypeError, ValueError):
-        raise exception.URLValidationError(url)
+        raise exception.URLValidationError(url=url)
+
+
+def create_directory(directory, keystone_user_id=None, keystone_group_id=None):
+    """Attempt to create a directory if it doesn't exist.
+
+    :param directory: string containing the path of the directory to create.
+    :param keystone_user_id: the system ID of the process running keystone.
+    :param keystone_group_id: the system ID of the group running keystone.
+
+    """
+    if not os.access(directory, os.F_OK):
+        LOG.info(
+            '%s does not appear to exist; attempting to create it', directory
+        )
+
+        try:
+            os.makedirs(directory, 0o700)
+        except OSError:
+            LOG.error(
+                'Failed to create %s: either it already '
+                'exists or you don\'t have sufficient permissions to '
+                'create it', directory
+            )
+
+        if keystone_user_id and keystone_group_id:
+            os.chown(
+                directory,
+                keystone_user_id,
+                keystone_group_id)
+        elif keystone_user_id or keystone_group_id:
+            LOG.warning(
+                'Unable to change the ownership of key repository without '
+                'a keystone user ID and keystone group ID both being '
+                'provided: %s', directory)

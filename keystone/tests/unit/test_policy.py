@@ -15,14 +15,16 @@
 
 import json
 import os
+import subprocess
 import uuid
 
+import mock
 from oslo_policy import policy as common_policy
 import six
 from testtools import matchers
 
 from keystone.common import policies
-from keystone.common import policy
+from keystone.common.rbac_enforcer import policy
 import keystone.conf
 from keystone import exception
 from keystone.tests import unit
@@ -44,7 +46,9 @@ class PolicyFileTestCase(unit.TestCase):
         self.target = {}
 
     def _policy_fixture(self):
-        return ksfixtures.Policy(self.tmpfilename, self.config_fixture)
+        return ksfixtures.Policy(
+            self.config_fixture, policy_file=self.tmpfilename
+        )
 
     def test_modified_policy_reloads(self):
         action = "example:test"
@@ -54,7 +58,7 @@ class PolicyFileTestCase(unit.TestCase):
         policy.enforce(empty_credentials, action, self.target)
         with open(self.tmpfilename, "w") as policyfile:
             policyfile.write("""{"example:test": ["false:false"]}""")
-        policy._ENFORCER.clear()
+        policy._ENFORCER._enforcer.clear()
         self.assertRaises(exception.ForbiddenAction, policy.enforce,
                           empty_credentials, action, self.target)
 
@@ -82,7 +86,7 @@ class PolicyTestCase(unit.TestCase):
 
     def _set_rules(self):
         these_rules = common_policy.Rules.from_dict(self.rules)
-        policy._ENFORCER.set_rules(these_rules)
+        policy._ENFORCER._enforcer.set_rules(these_rules)
 
     def test_enforce_nonexistent_action_throws(self):
         action = "example:noexist"
@@ -126,6 +130,40 @@ class PolicyTestCase(unit.TestCase):
         policy.enforce(admin_credentials, uppercase_action, self.target)
 
 
+class PolicyScopeTypesEnforcementTestCase(unit.TestCase):
+
+    def setUp(self):
+        super(PolicyScopeTypesEnforcementTestCase, self).setUp()
+        rule = common_policy.RuleDefault(
+            name='foo',
+            check_str='',
+            scope_types=['system']
+        )
+        policy._ENFORCER._enforcer.register_default(rule)
+        self.credentials = {}
+        self.action = 'foo'
+        self.target = {}
+
+    def test_forbidden_is_raised_if_enforce_scope_is_true(self):
+        self.config_fixture.config(group='oslo_policy', enforce_scope=True)
+        self.assertRaises(
+            exception.ForbiddenAction, policy.enforce, self.credentials,
+            self.action, self.target
+        )
+
+    def test_warning_message_is_logged_if_enforce_scope_is_false(self):
+        self.config_fixture.config(group='oslo_policy', enforce_scope=False)
+        expected_msg = (
+            'Policy foo failed scope check. The token used to make the '
+            'request was project scoped but the policy requires [\'system\'] '
+            'scope. This behavior may change in the future where using the '
+            'intended scope is required'
+        )
+        with mock.patch('warnings.warn') as mock_warn:
+            policy.enforce(self.credentials, self.action, self.target)
+            mock_warn.assert_called_with(expected_msg)
+
+
 class PolicyJsonTestCase(unit.TestCase):
 
     def _get_default_policy_rules(self):
@@ -140,7 +178,154 @@ class PolicyJsonTestCase(unit.TestCase):
         return rules
 
     def test_json_examples_have_matching_entries(self):
+        # TODO(lbragstad): Once all policies have been removed from
+        # policy.v3cloudsample.json, remove this test.
+        removed_policies = [
+            'service_role',
+            'service_or_admin',
+            'identity:get_limit_model',
+            'identity:list_limits',
+            'identity:create_project_tag',
+            'identity:delete_project_tag',
+            'identity:delete_project_tags',
+            'identity:update_project_tags',
+            'identity:ec2_get_credential',
+            'identity:ec2_delete_credential',
+            'identity:revocation_list',
+            'identity:create_trust',
+            'identity:list_trusts',
+            'identity:list_roles_for_trust',
+            'identity:get_role_for_trust',
+            'identity:delete_trust',
+            'identity:get_trust',
+            'identity:create_consumer',
+            'identity:get_consumer',
+            'identity:list_consumers',
+            'identity:delete_consumer',
+            'identity:update_consumer',
+            'identity:authorize_request_token',
+            'identity:list_access_token_roles',
+            'identity:get_access_token_role',
+            'identity:list_access_tokens',
+            'identity:get_access_token',
+            'identity:delete_access_token',
+            'identity:list_projects_for_endpoint',
+            'identity:add_endpoint_to_project',
+            'identity:check_endpoint_in_project',
+            'identity:list_endpoints_for_project',
+            'identity:remove_endpoint_from_project',
+            'identity:create_endpoint_group',
+            'identity:list_endpoint_groups',
+            'identity:get_endpoint_group',
+            'identity:update_endpoint_group',
+            'identity:delete_endpoint_group',
+            'identity:list_projects_associated_with_endpoint_group',
+            'identity:list_endpoints_associated_with_endpoint_group',
+            'identity:get_endpoint_group_in_project',
+            'identity:list_endpoint_groups_for_project',
+            'identity:add_endpoint_group_to_project',
+            'identity:remove_endpoint_group_from_project',
+            'identity:get_auth_catalog',
+            'identity:get_auth_projects',
+            'identity:get_auth_domains',
+            'identity:get_auth_system',
+            'identity:list_projects_for_user',
+            'identity:list_domains_for_user',
+            'identity:list_revoke_events',
+            'identity:get_security_compliance_domain_config',
+            'identity:get_application_credential',
+            'identity:list_application_credentials',
+            'identity:create_application_credential',
+            'identity:delete_application_credential',
+            'identity:create_credential',
+            'identity:get_credential',
+            'identity:list_credentials',
+            'identity:update_credential',
+            'identity:delete_credential',
+            'identity:create_registered_limits',
+            'identity:get_registered_limit',
+            'identity:list_registered_limits',
+            'identity:update_registered_limit',
+            'identity:delete_registered_limit',
+            'identity:create_service_provider',
+            'identity:get_service_provider',
+            'identity:list_service_providers',
+            'identity:update_service_provider',
+            'identity:delete_service_provider',
+            'identity:list_role_assignments',
+            'identity:create_role',
+            'identity:get_role',
+            'identity:list_roles',
+            'identity:update_role',
+            'identity:delete_role',
+            'identity:list_system_grants_for_user',
+            'identity:check_system_grant_for_user',
+            'identity:create_system_grant_for_user',
+            'identity:revoke_system_grant_for_user',
+            'identity:list_system_grants_for_group',
+            'identity:check_system_grant_for_group',
+            'identity:create_system_grant_for_group',
+            'identity:revoke_system_grant_for_group',
+            'identity:create_region',
+            'identity:get_region',
+            'identity:list_regions',
+            'identity:update_region',
+            'identity:delete_region',
+            'identity:create_endpoint',
+            'identity:get_endpoint',
+            'identity:list_endpoints',
+            'identity:update_endpoint',
+            'identity:delete_endpoint',
+            'identity:create_mapping',
+            'identity:get_mapping',
+            'identity:list_mappings',
+            'identity:update_mapping',
+            'identity:delete_mapping',
+            'identity:create_identity_provider',
+            'identity:get_identity_provider',
+            'identity:list_identity_providers',
+            'identity:update_identity_provider',
+            'identity:delete_identity_provider',
+            'identity:create_protocol',
+            'identity:get_protocol',
+            'identity:list_protocols',
+            'identity:update_protocol',
+            'identity:delete_protocol',
+            'identity:create_domain',
+            'identity:get_domain',
+            'identity:list_domains',
+            'identity:update_domain',
+            'identity:delete_domain',
+            'identity:create_project',
+            'identity:get_project',
+            'identity:list_projects',
+            'identity:update_project',
+            'identity:delete_project',
+            'identity:list_user_projects',
+            'identity:create_service',
+            'identity:get_service',
+            'identity:list_services',
+            'identity:update_service',
+            'identity:delete_service',
+            'identity:create_user',
+            'identity:get_user',
+            'identity:list_users',
+            'identity:update_user',
+            'identity:delete_user',
+            'identity:get_group',
+            'identity:list_groups',
+            'identity:list_groups_for_user',
+            'identity:create_group',
+            'identity:update_group',
+            'identity:delete_group',
+            'identity:list_users_in_group',
+            'identity:remove_user_from_group',
+            'identity:check_user_in_group',
+            'identity:add_user_to_group'
+        ]
         policy_keys = self._get_default_policy_rules()
+        for p in removed_policies:
+            del policy_keys[p]
         cloud_policy_keys = set(
             json.load(open(unit.dirs.etc('policy.v3cloudsample.json'))))
 
@@ -166,11 +351,10 @@ class PolicyJsonTestCase(unit.TestCase):
                        'is_admin_project': True, 'project_id': None,
                        'domain_id': uuid.uuid4().hex}
 
-        # Since we are moving policy.json defaults to code, we instead call
-        # `policy.init()` which does the enforce setup for us with the added
-        # bonus of registering the in code default policies.
-        policy.init()
-        result = policy._ENFORCER.enforce(action, target, credentials)
+        # The enforcer is setup behind the scenes and registers the in code
+        # default policies.
+        result = policy._ENFORCER._enforcer.enforce(action, target,
+                                                    credentials)
         self.assertTrue(result)
 
         domain_policy = unit.dirs.etc('policy.v3cloudsample.json')
@@ -213,3 +397,18 @@ class PolicyJsonTestCase(unit.TestCase):
 
         doc_targets = list(read_doc_targets())
         self.assertItemsEqual(policy_keys, doc_targets + policy_rule_keys)
+
+
+class GeneratePolicyFileTestCase(unit.TestCase):
+
+    def test_policy_generator_from_command_line(self):
+        # This test ensures keystone.common.policy:get_enforcer ignores
+        # unexpected arguments before handing them off to oslo.config, which
+        # will fail and prevent users from generating policy files.
+        ret_val = subprocess.Popen(
+            ['oslopolicy-policy-generator', '--namespace', 'keystone'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        ret_val.communicate()
+        self.assertEqual(ret_val.returncode, 0)

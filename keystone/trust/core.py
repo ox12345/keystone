@@ -16,8 +16,8 @@
 
 from six.moves import zip
 
-from keystone.common import dependency
 from keystone.common import manager
+from keystone.common import provider_api
 import keystone.conf
 from keystone import exception
 from keystone.i18n import _
@@ -25,10 +25,9 @@ from keystone import notifications
 
 
 CONF = keystone.conf.CONF
+PROVIDERS = provider_api.ProviderAPIs
 
 
-@dependency.requires('identity_api')
-@dependency.provider('trust_api')
 class Manager(manager.Manager):
     """Default pivot point for the Trust backend.
 
@@ -38,6 +37,7 @@ class Manager(manager.Manager):
     """
 
     driver_namespace = 'keystone.trust'
+    _provides_api = 'trust_api'
 
     _TRUST = "OS-TRUST:trust"
 
@@ -124,7 +124,7 @@ class Manager(manager.Manager):
             for parent, child in zip(trust_chain[1:], trust_chain):
                 self._validate_redelegation(parent, child)
                 try:
-                    self.identity_api.assert_user_enabled(
+                    PROVIDERS.identity_api.assert_user_enabled(
                         parent['trustee_user_id'])
                 except (AssertionError, exception.NotFound):
                     raise exception.Forbidden(

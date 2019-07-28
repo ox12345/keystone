@@ -17,10 +17,9 @@ import six
 
 from keystone import assignment
 from keystone.common import cache
-from keystone.common import clean
-from keystone.common import dependency
 from keystone.common import driver_hints
 from keystone.common import manager
+from keystone.common import provider_api
 from keystone.common import utils
 import keystone.conf
 from keystone import exception
@@ -33,13 +32,12 @@ from keystone.token import provider as token_provider
 CONF = keystone.conf.CONF
 LOG = log.getLogger(__name__)
 MEMOIZE = cache.get_memoization_decorator(group='resource')
+PROVIDERS = provider_api.ProviderAPIs
+
 
 TAG_SEARCH_FILTERS = ('tags', 'tags-any', 'not-tags', 'not-tags-any')
 
 
-@dependency.provider('resource_api')
-@dependency.requires('assignment_api', 'credential_api', 'domain_config_api',
-                     'identity_api', 'trust_api')
 class Manager(manager.Manager):
     """Default pivot point for the Resource backend.
 
@@ -49,6 +47,7 @@ class Manager(manager.Manager):
     """
 
     driver_namespace = 'keystone.resource'
+    _provides_api = 'resource_api'
 
     _DOMAIN = 'domain'
     _PROJECT = 'project'
@@ -60,7 +59,9 @@ class Manager(manager.Manager):
         # SQL Identity in some form. Even if SQL Identity is not used, there
         # is almost no reason to have non-SQL Resource. Keystone requires
         # SQL in a number of ways, this simply codifies it plainly for resource
+        # the driver_name = None simply implies we don't need to load a driver.
         self.driver = resource_sql.Resource()
+        super(Manager, self).__init__(driver_name=None)
 
     def _get_hierarchy_depth(self, parents_list):
         return len(parents_list) + 1
@@ -74,6 +75,15 @@ class Manager(manager.Manager):
         # pushing any existing hierarchies over the limit, we add one to the
         # maximum depth allowed, as specified in the configuration file.
         max_depth = CONF.max_project_tree_depth + 1
+
+        # NOTE(wxy): If the hierarchical limit enforcement model is used, the
+        # project depth should be not greater than the model's limit as well.
+        #
+        # TODO(wxy): Deprecate and remove CONF.max_project_tree_depth, let the
+        # depth check only based on the limit enforcement model.
+        limit_model = PROVIDERS.unified_limit_api.enforcement_model
+        if limit_model.MAX_PROJECT_TREE_DEPTH is not None:
+            max_depth = min(max_depth, limit_model.MAX_PROJECT_TREE_DEPTH + 1)
         if self._get_hierarchy_depth(parents_list) > max_depth:
             raise exception.ForbiddenNotSecurity(
                 _('Max hierarchy depth reached for %s branch.') % project_id)
@@ -90,8 +100,9 @@ class Manager(manager.Manager):
         :raises keystone.exception.ValidationError: If one of the constraints
             was not satisfied.
         """
-        if (not self.identity_api.multiple_domains_supported and
-                project_ref['id'] != CONF.identity.default_domain_id):
+        if (not PROVIDERS.identity_api.multiple_domains_supported and
+                project_ref['id'] != CONF.identity.default_domain_id and
+                project_ref['id'] != base.NULL_DOMAIN_ID):
             raise exception.ValidationError(
                 message=_('Multiple domains are not supported'))
 
@@ -175,8 +186,10 @@ class Manager(manager.Manager):
                      ) % project['name']
         else:
             return _('it is not permitted to have two projects '
-                     'with the same name in the same domain : %s'
-                     ) % project['name']
+                     'with either the same name or same id in '
+                     'the same domain: '
+                     'name is %(name)s, project id %(id)s'
+                     ) % project
 
     def create_project(self, project_id, project, initiator=None):
         project = project.copy()
@@ -221,6 +234,9 @@ class Manager(manager.Manager):
             self.get_project.set(ret, self, project_id)
             self.get_project_by_name.set(ret, self, ret['name'],
                                          ret['domain_id'])
+
+        assignment.COMPUTED_ASSIGNMENTS_REGION.invalidate()
+
         return ret
 
     def assert_domain_enabled(self, domain_id, domain=None):
@@ -292,8 +308,6 @@ class Manager(manager.Manager):
         if original_project['is_domain']:
             domain = self._get_domain_from_project(original_project)
             self.assert_domain_not_federated(project_id, domain)
-            if 'enabled' in domain:
-                domain['enabled'] = clean.domain_enabled(domain['enabled'])
             url_safe_option = CONF.resource.domain_name_url_safe
             exception_entity = 'Domain'
         else:
@@ -307,8 +321,7 @@ class Manager(manager.Manager):
             self._raise_reserved_character_exception(exception_entity,
                                                      project['name'])
         elif project_name_changed:
-            project['name'] = clean.project_name(project['name'])
-
+            project['name'] = project['name'].strip()
         parent_id = original_project.get('parent_id')
         if 'parent_id' in project and project.get('parent_id') != parent_id:
             raise exception.ForbiddenNotSecurity(
@@ -425,29 +438,20 @@ class Manager(manager.Manager):
 
         return ret
 
-    def _pre_delete_cleanup_project(self, project_id):
-        project_user_ids = (
-            self.assignment_api.list_user_ids_for_project(project_id))
-        for user_id in project_user_ids:
-            payload = {'user_id': user_id, 'project_id': project_id}
-            notifications.Audit.internal(
-                notifications.INVALIDATE_USER_PROJECT_TOKEN_PERSISTENCE,
-                payload
-            )
-
     def _post_delete_cleanup_project(self, project_id, project,
                                      initiator=None):
         try:
             self.get_project.invalidate(self, project_id)
             self.get_project_by_name.invalidate(self, project['name'],
                                                 project['domain_id'])
-            self.assignment_api.delete_project_assignments(project_id)
+            PROVIDERS.assignment_api.delete_project_assignments(project_id)
             # Invalidate user role assignments cache region, as it may
             # be caching role assignments where the target is
             # the specified project
             assignment.COMPUTED_ASSIGNMENTS_REGION.invalidate()
-            self.credential_api.delete_credentials_for_project(project_id)
-            self.trust_api.delete_trusts_for_project(project_id)
+            PROVIDERS.credential_api.delete_credentials_for_project(project_id)
+            PROVIDERS.trust_api.delete_trusts_for_project(project_id)
+            PROVIDERS.unified_limit_api.delete_limits_for_project(project_id)
         finally:
             # attempt to send audit event even if the cache invalidation raises
             notifications.Audit.deleted(self._PROJECT, project_id, initiator)
@@ -464,13 +468,12 @@ class Manager(manager.Manager):
         """
         project = self.driver.get_project(project_id)
         if project.get('is_domain'):
-            self.delete_domain(project_id, initiator)
+            self._delete_domain(project, initiator)
         else:
-            self._delete_project(project_id, initiator, cascade)
+            self._delete_project(project, initiator, cascade)
 
-    def _delete_project(self, project_id, initiator=None, cascade=False):
-        # Use the driver directly to prevent using old cached value.
-        project = self.driver.get_project(project_id)
+    def _delete_project(self, project, initiator=None, cascade=False):
+        project_id = project['id']
         if project['is_domain'] and project['enabled']:
             raise exception.ValidationError(
                 message=_('cannot delete an enabled project acting as a '
@@ -499,20 +502,26 @@ class Manager(manager.Manager):
             project_list = subtree_list + [project]
             projects_ids = [x['id'] for x in project_list]
 
-            for prj in project_list:
-                self._pre_delete_cleanup_project(prj['id'])
             ret = self.driver.delete_projects_from_ids(projects_ids)
             for prj in project_list:
                 self._post_delete_cleanup_project(prj['id'], prj, initiator)
         else:
-            self._pre_delete_cleanup_project(project_id)
             ret = self.driver.delete_project(project_id)
             self._post_delete_cleanup_project(project_id, project, initiator)
 
+        reason = (
+            'The token cache is being invalidate because project '
+            '%(project_id)s was deleted. Authorization will be recalculated '
+            'and enforced accordingly the next time users authenticate or '
+            'validate a token.' % {'project_id': project_id}
+        )
+        notifications.invalidate_token_cache_notification(reason)
         return ret
 
     def _filter_projects_list(self, projects_list, user_id):
-        user_projects = self.assignment_api.list_projects_for_user(user_id)
+        user_projects = PROVIDERS.assignment_api.list_projects_for_user(
+            user_id
+        )
         user_projects_ids = set([proj['id'] for proj in user_projects])
         # Keep only the projects present in user_projects
         return [proj for proj in projects_list
@@ -525,13 +534,28 @@ class Manager(manager.Manager):
         # Check if project_id exists
         self.get_project(project_id)
 
-    def list_project_parents(self, project_id, user_id=None):
+    def _include_limits(self, projects):
+        """Modify a list of projects to include limit information.
+
+        :param projects: a list of project references including an `id`
+        :type projects: list of dictionaries
+        """
+        for project in projects:
+            hints = driver_hints.Hints()
+            hints.add_filter('project_id', project['id'])
+            limits = PROVIDERS.unified_limit_api.list_limits(hints)
+            project['limits'] = limits
+
+    def list_project_parents(self, project_id, user_id=None,
+                             include_limits=False):
         self._assert_valid_project_id(project_id)
         parents = self.driver.list_project_parents(project_id)
         # If a user_id was provided, the returned list should be filtered
         # against the projects this user has access to.
         if user_id:
             parents = self._filter_projects_list(parents, user_id)
+        if include_limits:
+            self._include_limits(parents)
         return parents
 
     def _build_parents_as_ids_dict(self, project, parents_by_id):
@@ -577,13 +601,16 @@ class Manager(manager.Manager):
             project, {proj['id']: proj for proj in parents_list})
         return parents_as_ids
 
-    def list_projects_in_subtree(self, project_id, user_id=None):
+    def list_projects_in_subtree(self, project_id, user_id=None,
+                                 include_limits=False):
         self._assert_valid_project_id(project_id)
         subtree = self.driver.list_projects_in_subtree(project_id)
         # If a user_id was provided, the returned list should be filtered
         # against the projects this user has access to.
         if user_id:
             subtree = self._filter_projects_list(subtree, user_id)
+        if include_limits:
+            self._include_limits(subtree)
         return subtree
 
     def _build_subtree_as_ids_dict(self, project_id, subtree_by_parent):
@@ -758,7 +785,9 @@ class Manager(manager.Manager):
             domain = self.driver.get_project(domain_id)
         except exception.ProjectNotFound:
             raise exception.DomainNotFound(domain_id=domain_id)
+        self._delete_domain(domain, initiator)
 
+    def _delete_domain(self, domain, initiator=None):
         # To help avoid inadvertent deletes, we insist that the domain
         # has been previously disabled.  This also prevents a user deleting
         # their own domain since, once it is disabled, they won't be able
@@ -768,14 +797,18 @@ class Manager(manager.Manager):
                 _('Cannot delete a domain that is enabled, please disable it '
                   'first.'))
 
+        domain_id = domain['id']
         self._delete_domain_contents(domain_id)
-        self._delete_project(domain_id, initiator)
+        notifications.Audit.internal(
+            notifications.DOMAIN_DELETED, domain_id
+        )
+        self._delete_project(domain, initiator)
         try:
             self.get_domain.invalidate(self, domain_id)
             self.get_domain_by_name.invalidate(self, domain['name'])
             # Delete any database stored domain config
-            self.domain_config_api.delete_config_options(domain_id)
-            self.domain_config_api.release_registration(domain_id)
+            PROVIDERS.domain_config_api.delete_config_options(domain_id)
+            PROVIDERS.domain_config_api.release_registration(domain_id)
         finally:
             # attempt to send audit event even if the cache invalidation raises
             notifications.Audit.deleted(self._DOMAIN, domain_id, initiator)
@@ -804,7 +837,7 @@ class Manager(manager.Manager):
                 _delete_projects(proj, projects, examined)
 
             try:
-                self.delete_project(project['id'], initiator=None)
+                self._delete_project(project, initiator=None)
             except exception.ProjectNotFound:
                 LOG.debug(('Project %(projectid)s not found when '
                            'deleting domain contents for %(domainid)s, '
@@ -943,10 +976,18 @@ class Manager(manager.Manager):
         self.update_project(project_id, project)
         notifications.Audit.deleted(self._PROJECT_TAG, tag)
 
+    def check_project_depth(self, max_depth=None):
+        """Check project depth whether greater than input or not."""
+        if max_depth:
+            exceeded_project_ids = self.driver.check_project_depth(max_depth)
+            if exceeded_project_ids:
+                raise exception.LimitTreeExceedError(exceeded_project_ids,
+                                                     max_depth)
+
+
 MEMOIZE_CONFIG = cache.get_memoization_decorator(group='domain_config')
 
 
-@dependency.provider('domain_config_api')
 class DomainConfigManager(manager.Manager):
     """Default pivot point for the Domain Config backend."""
 
@@ -960,6 +1001,7 @@ class DomainConfigManager(manager.Manager):
     # the identity manager are supported.
 
     driver_namespace = 'keystone.resource.domain_config'
+    _provides_api = 'domain_config_api'
 
     # We explicitly state each whitelisted option instead of pulling all ldap
     # options from CONF and selectively pruning them to prevent a security

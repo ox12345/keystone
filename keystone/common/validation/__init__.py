@@ -40,15 +40,12 @@ def nullable(property_schema):
     #                do that yet so I'm not wasting time on it
     new_schema = property_schema.copy()
     new_schema['type'] = [property_schema['type'], 'null']
-    return new_schema
-
-
-def add_array_type(property_schema):
-    """Convert the parameter schema to be of type list.
-
-    :param dict property_schema: schema to add array type to
-    :returns: a new dict schema
-    """
-    new_schema = property_schema.copy()
-    new_schema['type'] = [property_schema['type'], 'array']
+    # NOTE(kmalloc): If enum is specified (such as our boolean case) ensure we
+    # add null to the enum as well so that null can be passed/validated as
+    # expected. Without adding to the enum, null will not validate as enum is
+    # explicitly listing valid values. According to the JSON Schema
+    # specification, the values must be unique in the enum array.
+    if 'enum' in new_schema and None not in new_schema['enum']:
+        # In the enum the 'null' is NoneType
+        new_schema['enum'].append(None)
     return new_schema

@@ -12,16 +12,21 @@
 
 import uuid
 
+from keystone.common import provider_api
+
+PROVIDERS = provider_api.ProviderAPIs
+
 
 class ShadowUsersCoreTests(object):
     def test_shadow_federated_user(self):
-        user = self.identity_api.shadow_federated_user(
+        user = PROVIDERS.identity_api.shadow_federated_user(
             self.federated_user['idp_id'],
             self.federated_user['protocol_id'],
             self.federated_user['unique_id'],
-            self.federated_user['display_name'])
+            self.federated_user['display_name'],
+            self.email)
         self.assertIsNotNone(user['id'])
-        self.assertEqual(6, len(user.keys()))
+        self.assertEqual(7, len(user.keys()))
         self.assertIsNotNone(user['name'])
         self.assertIsNone(user['password_expires_at'])
         self.assertIsNotNone(user['domain_id'])
@@ -29,11 +34,12 @@ class ShadowUsersCoreTests(object):
         # equal True. assertTrue should not be used, because it converts
         # the passed value to bool().
         self.assertEqual(True, user['enabled'])
+        self.assertIsNotNone(user['email'])
 
     def test_shadow_existing_federated_user(self):
 
         # introduce the user to keystone for the first time
-        shadow_user1 = self.identity_api.shadow_federated_user(
+        shadow_user1 = PROVIDERS.identity_api.shadow_federated_user(
             self.federated_user['idp_id'],
             self.federated_user['protocol_id'],
             self.federated_user['unique_id'],
@@ -45,7 +51,7 @@ class ShadowUsersCoreTests(object):
         # internally, this operation causes request to the driver. It should
         # not fail.
         self.federated_user['display_name'] = uuid.uuid4().hex
-        shadow_user2 = self.identity_api.shadow_federated_user(
+        shadow_user2 = PROVIDERS.identity_api.shadow_federated_user(
             self.federated_user['idp_id'],
             self.federated_user['protocol_id'],
             self.federated_user['unique_id'],

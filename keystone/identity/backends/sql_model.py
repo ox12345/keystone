@@ -48,17 +48,17 @@ class User(sql.ModelBase, sql.ModelDictMixinWithExtras):
         backref='user',
         collection_class=collections.attribute_mapped_collection('option_id'))
     local_user = orm.relationship('LocalUser', uselist=False,
-                                  single_parent=True, lazy='subquery',
+                                  single_parent=True, lazy='joined',
                                   cascade='all,delete-orphan', backref='user')
     federated_users = orm.relationship('FederatedUser',
                                        single_parent=True,
-                                       lazy='subquery',
+                                       lazy='joined',
                                        cascade='all,delete-orphan',
                                        backref='user')
     nonlocal_user = orm.relationship('NonLocalUser',
                                      uselist=False,
                                      single_parent=True,
-                                     lazy='subquery',
+                                     lazy='joined',
                                      cascade='all,delete-orphan',
                                      backref='user')
     created_at = sql.Column(sql.DateTime, nullable=True)
@@ -105,10 +105,7 @@ class User(sql.ModelBase, sql.ModelDictMixinWithExtras):
     def password(self):
         """Return the current password."""
         if self.password_ref:
-            if self.password_ref.password_hash is not None:
-                return self.password_ref.password_hash
-            else:
-                return self.password_ref.password
+            return self.password_ref.password_hash
         return None
 
     @property
@@ -140,6 +137,7 @@ class User(sql.ModelBase, sql.ModelDictMixinWithExtras):
         # truncate extra passwords
         if self.local_user.passwords:
             unique_cnt = CONF.security_compliance.unique_last_password_count
+            unique_cnt = unique_cnt + 1 if unique_cnt == 0 else unique_cnt
             self.local_user.passwords = self.local_user.passwords[-unique_cnt:]
         # set all previous passwords to be expired
         for ref in self.local_user.passwords:
@@ -148,23 +146,17 @@ class User(sql.ModelBase, sql.ModelDictMixinWithExtras):
         new_password_ref = Password()
 
         hashed_passwd = None
-        hashed_compat = None
         if value is not None:
             # NOTE(notmorgan): hash the passwords, never directly bind the
-            # "value" in the unhashed form to hashed_passwd or hashed_compat
-            # to ensure the unhashed password cannot end up in the db. If an
-            # unhashed password ends up in the DB, it cannot be used for auth,
-            # it is however incorrect and could leak user credentials (due to
-            # users doing insecure things such as sharing passwords across
+            # "value" in the unhashed form to hashed_passwd to ensure the
+            # unhashed password cannot end up in the db. If an unhashed
+            # password ends up in the DB, it cannot be used for auth, it is
+            # however incorrect and could leak user credentials (due to users
+            # doing insecure things such as sharing passwords across
             # different systems) to unauthorized parties.
             hashed_passwd = password_hashing.hash_password(value)
 
-            # TODO(notmorgan): Remove this compat code in Q release.
-            if CONF.identity.rolling_upgrade_password_hash_compat:
-                hashed_compat = password_hashing.hash_password_compat(value)
-
         new_password_ref.password_hash = hashed_passwd
-        new_password_ref.password = hashed_compat
         new_password_ref.created_at = now
         new_password_ref.expires_at = self._get_password_expires_at(now)
         self.local_user.passwords.append(new_password_ref)
@@ -188,7 +180,7 @@ class User(sql.ModelBase, sql.ModelDictMixinWithExtras):
 
     @password.expression
     def password(cls):
-        return Password.password
+        return Password.password_hash
 
     # NOTE(stevemar): we use a hybrid property here because we leverage the
     # expression method, see `@enabled.expression` and `User._enabled` below.
@@ -251,7 +243,7 @@ class User(sql.ModelBase, sql.ModelDictMixinWithExtras):
         new_dict = user_dict.copy()
         resource_options = {}
         options = new_dict.pop('options', {})
-        password_expires_at_key = 'password_expires_at'
+        password_expires_at_key = 'password_expires_at'  # nosec
         if password_expires_at_key in user_dict:
             del new_dict[password_expires_at_key]
         for opt in cls.resource_options_registry.options:
@@ -276,7 +268,7 @@ class LocalUser(sql.ModelBase, sql.ModelDictMixin):
     passwords = orm.relationship('Password',
                                  single_parent=True,
                                  cascade='all,delete-orphan',
-                                 lazy='subquery',
+                                 lazy='joined',
                                  backref='local_user',
                                  order_by='Password.created_at_int')
     failed_auth_count = sql.Column(sql.Integer, nullable=True)
@@ -292,15 +284,11 @@ class LocalUser(sql.ModelBase, sql.ModelDictMixin):
 
 class Password(sql.ModelBase, sql.ModelDictMixin):
     __tablename__ = 'password'
-    attributes = ['id', 'local_user_id', 'password', 'password_hash',
-                  'created_at', 'expires_at']
+    attributes = ['id', 'local_user_id', 'password_hash', 'created_at',
+                  'expires_at']
     id = sql.Column(sql.Integer, primary_key=True)
     local_user_id = sql.Column(sql.Integer, sql.ForeignKey('local_user.id',
                                ondelete='CASCADE'))
-    # TODO(notmorgan): in the Q release the "password" field can be dropped as
-    # long as data migration exists to move the hashes over to the
-    # password_hash column if no value is in the password_hash column.
-    password = sql.Column(sql.String(128), nullable=True)
     password_hash = sql.Column(sql.String(255), nullable=True)
 
     # TODO(lbragstad): Once Rocky opens for development, the _created_at and
@@ -354,7 +342,8 @@ class FederatedUser(sql.ModelBase, sql.ModelDictMixin):
         sql.UniqueConstraint('idp_id', 'protocol_id', 'unique_id'),
         sqlalchemy.ForeignKeyConstraint(['protocol_id', 'idp_id'],
                                         ['federation_protocol.id',
-                                         'federation_protocol.idp_id'])
+                                         'federation_protocol.idp_id'],
+                                        ondelete='CASCADE')
     )
 
 

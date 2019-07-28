@@ -62,15 +62,14 @@ Resource
 
 The Resource service provides data about `projects` and `domains`.
 
-Projects (Tenants)
-^^^^^^^^^^^^^^^^^^
+Projects
+^^^^^^^^
 
-``Projects`` (known as ``Tenants`` in v2.0) represent the base unit of
-``ownership`` in OpenStack, in that all resources in OpenStack should be owned
-by a specific project. A project itself must be owned by a specific domain, and
-hence all project names are **not** globally unique, but unique to their
-domain. If the domain for a project is not specified, then it is added to the
-default domain.
+``Projects`` represent the base unit of ``ownership`` in OpenStack, in that all
+resources in OpenStack should be owned by a specific project. A project itself
+must be owned by a specific domain, and hence all project names are **not**
+globally unique, but unique to their domain. If the domain for a project is not
+specified, then it is added to the default domain.
 
 Domains
 ^^^^^^^
@@ -128,13 +127,6 @@ Catalog
 The Catalog service provides an endpoint registry used for endpoint discovery.
 
 
-Policy
-------
-
-The Policy service provides a rule-based authorization engine and the
-associated rule management interface.
-
-
 Application Construction
 ========================
 
@@ -146,7 +138,7 @@ of pipelines of WSGI middleware, such as:
 .. code-block:: ini
 
     [pipeline:api_v3]
-    pipeline = healthcheck cors sizelimit http_proxy_to_wsgi osprofiler url_normalize request_id build_auth_context token_auth json_body ec2_extension_v3 s3_extension service_v3
+    pipeline = healthcheck cors sizelimit http_proxy_to_wsgi osprofiler url_normalize request_id build_auth_context json_body ec2_extension_v3 s3_extension service_v3
 
 
 These in turn use a subclass of :mod:`keystone.common.wsgi.ComposingRouter` to
@@ -158,72 +150,72 @@ on the keystone configuration.
 
 * Assignment
 
- * :mod:`keystone.assignment.controllers.GrantAssignmentV3`
- * :mod:`keystone.assignment.controllers.ImpliedRolesV3`
- * :mod:`keystone.assignment.controllers.ProjectAssignmentV3`
- * :mod:`keystone.assignment.controllers.TenantAssignment`
- * :mod:`keystone.assignment.controllers.RoleAssignmentV3`
- * :mod:`keystone.assignment.controllers.RoleV3`
+  * :mod:`keystone.assignment.controllers.GrantAssignmentV3`
+  * :mod:`keystone.assignment.controllers.ImpliedRolesV3`
+  * :mod:`keystone.assignment.controllers.ProjectAssignmentV3`
+  * :mod:`keystone.assignment.controllers.TenantAssignment`
+  * :mod:`keystone.assignment.controllers.RoleAssignmentV3`
+  * :mod:`keystone.assignment.controllers.RoleV3`
 
 * Authentication
 
- * :mod:`keystone.auth.controllers.Auth`
+  * :mod:`keystone.auth.controllers.Auth`
 
 * Catalog
 
- * :mod:`keystone.catalog.controllers.EndpointFilterV3Controller`
- * :mod:`keystone.catalog.controllers.EndpointGroupV3Controller`
- * :mod:`keystone.catalog.controllers.EndpointV3`
- * :mod:`keystone.catalog.controllers.ProjectEndpointGroupV3Controller`
- * :mod:`keystone.catalog.controllers.RegionV3`
- * :mod:`keystone.catalog.controllers.ServiceV3`
+  * :mod:`keystone.catalog.controllers.EndpointFilterV3Controller`
+  * :mod:`keystone.catalog.controllers.EndpointGroupV3Controller`
+  * :mod:`keystone.catalog.controllers.EndpointV3`
+  * :mod:`keystone.catalog.controllers.ProjectEndpointGroupV3Controller`
+  * :mod:`keystone.catalog.controllers.RegionV3`
+  * :mod:`keystone.catalog.controllers.ServiceV3`
 
 * Credentials
 
- * :mod:`keystone.contrib.ec2.controllers.Ec2ControllerV3`
- * :mod:`keystone.credential.controllers.CredentialV3`
+  * :mod:`keystone.contrib.ec2.controllers.Ec2ControllerV3`
+  * :mod:`keystone.credential.controllers.CredentialV3`
 
 * Federation
 
- * :mod:`keystone.federation.controllers.IdentityProvider`
- * :mod:`keystone.federation.controllers.FederationProtocol`
- * :mod:`keystone.federation.controllers.MappingController`
- * :mod:`keystone.federation.controllers.Auth`
- * :mod:`keystone.federation.controllers.DomainV3`
- * :mod:`keystone.federation.controllers.ProjectAssignmentV3`
- * :mod:`keystone.federation.controllers.ServiceProvider`
- * :mod:`keystone.federation.controllers.SAMLMetadataV3`
+  * :mod:`keystone.federation.controllers.IdentityProvider`
+  * :mod:`keystone.federation.controllers.FederationProtocol`
+  * :mod:`keystone.federation.controllers.MappingController`
+  * :mod:`keystone.federation.controllers.Auth`
+  * :mod:`keystone.federation.controllers.DomainV3`
+  * :mod:`keystone.federation.controllers.ProjectAssignmentV3`
+  * :mod:`keystone.federation.controllers.ServiceProvider`
+  * :mod:`keystone.federation.controllers.SAMLMetadataV3`
 
 * Identity
 
- * :mod:`keystone.identity.controllers.GroupV3`
- * :mod:`keystone.identity.controllers.UserV3`
+  * :mod:`keystone.identity.controllers.GroupV3`
+  * :mod:`keystone.identity.controllers.UserV3`
 
 * Oauth1
 
- * :mod:`keystone.oauth1.controllers.ConsumerCrudV3`
- * :mod:`keystone.oauth1.controllers.AccessTokenCrudV3`
- * :mod:`keystone.oauth1.controllers.AccessTokenRolesV3`
- * :mod:`keystone.oauth1.controllers.OAuthControllerV3`
+  * :mod:`keystone.oauth1.controllers.ConsumerCrudV3`
+  * :mod:`keystone.oauth1.controllers.AccessTokenCrudV3`
+  * :mod:`keystone.oauth1.controllers.AccessTokenRolesV3`
+  * :mod:`keystone.oauth1.controllers.OAuthControllerV3`
 
 * Policy
 
- * :mod:`keystone.policy.controllers.PolicyV3`
+  * :mod:`keystone.policy.controllers.PolicyV3`
 
 * Resource
 
- * :mod:`keystone.resource.controllers.DomainV3`
- * :mod:`keystone.resource.controllers.DomainConfigV3`
- * :mod:`keystone.resource.controllers.ProjectV3`
- * :mod:`keystone.resource.controllers.ProjectTagV3`
+  * :mod:`keystone.resource.controllers.DomainV3`
+  * :mod:`keystone.resource.controllers.DomainConfigV3`
+  * :mod:`keystone.resource.controllers.ProjectV3`
+  * :mod:`keystone.resource.controllers.ProjectTagV3`
 
 * Revoke
 
- * :mod:`keystone.revoke.controllers.RevokeController`
+  * :mod:`keystone.revoke.controllers.RevokeController`
 
 * Trust
 
- * :mod:`keystone.trust.controllers.TrustV3`
+  * :mod:`keystone.trust.controllers.TrustV3`
 
 .. _Paste: http://pythonpaste.org/
 
@@ -276,9 +268,9 @@ interpolation)
 .. code-block:: ini
 
     [DEFAULT]
-    catalog.RegionOne.identity.publicURL = http://localhost:$(public_port)s/v2.0
-    catalog.RegionOne.identity.adminURL = http://localhost:$(public_port)s/v2.0
-    catalog.RegionOne.identity.internalURL = http://localhost:$(public_port)s/v2.0
+    catalog.RegionOne.identity.publicURL = http://localhost:$(public_port)s/v3
+    catalog.RegionOne.identity.adminURL = http://localhost:$(public_port)s/v3
+    catalog.RegionOne.identity.internalURL = http://localhost:$(public_port)s/v3
     catalog.RegionOne.identity.name = 'Identity Service'
 
 
@@ -291,14 +283,14 @@ data than they know what to do with and pass them on to a backend.
 
 There are a few main data types:
 
- * **User**: has account credentials, is associated with one or more projects or domains
- * **Group**: a collection of users, is associated with one or more projects or domains
- * **Project**: unit of ownership in OpenStack, contains one or more users
- * **Domain**: unit of ownership in OpenStack, contains users, groups and projects
- * **Role**: a first-class piece of metadata associated with many user-project pairs.
- * **Token**: identifying credential associated with a user or user and project
- * **Extras**: bucket of key-value metadata associated with a user-project pair.
- * **Rule**: describes a set of requirements for performing an action.
+* **User**: has account credentials, is associated with one or more projects or domains
+* **Group**: a collection of users, is associated with one or more projects or domains
+* **Project**: unit of ownership in OpenStack, contains one or more users
+* **Domain**: unit of ownership in OpenStack, contains users, groups and projects
+* **Role**: a first-class piece of metadata associated with many user-project pairs.
+* **Token**: identifying credential associated with a user or user and project
+* **Extras**: bucket of key-value metadata associated with a user-project pair.
+* **Rule**: describes a set of requirements for performing an action.
 
 While the general data model allows a many-to-many relationship between users
 and groups to projects and domains; the actual backend implementations take
@@ -312,8 +304,8 @@ While it is expected that any "real" deployment at a large company will manage
 their users and groups in their existing user systems, a variety of CRUD
 operations are provided for the sake of development and testing.
 
-CRUD is treated as an extension or additional feature to the core feature set
-in that it is not required that a backend support it. It is expected that
+CRUD is treated as an extension or additional feature to the core feature set,
+in that a backend is not required to support it. It is expected that
 backends for services that don't support the CRUD operations will raise a
 :mod:`keystone.exception.NotImplemented`.
 
@@ -327,13 +319,13 @@ based on whether the user is authorized to perform that action.
 For the purposes of keystone there are only a couple levels of authorization
 being checked for:
 
- * Require that the performing user is considered an admin.
- * Require that the performing user matches the user being referenced.
+* Require that the performing user is considered an admin.
+* Require that the performing user matches the user being referenced.
 
 Other systems wishing to use the policy engine will require additional styles
 of checks and will possibly write completely custom backends. By default,
 keystone leverages policy enforcement that is maintained in `oslo.policy
-<https://git.openstack.org/cgit/openstack/oslo.policy/>`_.
+<https://opendev.org/openstack/oslo.policy/>`_.
 
 
 Rules
@@ -481,14 +473,15 @@ What is Scope?
 
 Scope is an overloaded term.
 
-In reference to authenticating, as seen above, scope refers to the portion
-of the POST data that dictates what ``Resource`` (project or domain) the user
-wants to access.
+In reference to authenticating, as seen above, scope refers to the portion of
+the POST data that dictates what ``Resource`` (project, domain, or system) the
+user wants to access.
 
 In reference to tokens, scope refers to the effectiveness of a token,
 i.e.: a `project-scoped` token is only useful on the project it was initially
 granted for. A `domain-scoped` token may be used to perform domain-related
-function.
+function. A `system-scoped` token is only useful for interacting with APIs that
+affect the entire deployment.
 
 In reference to users, groups, and projects, scope often refers to the domain
 that the entity is owned by. i.e.: a user in domain X is scoped to domain X.

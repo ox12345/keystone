@@ -13,10 +13,11 @@
 import copy
 import datetime
 import sqlalchemy
-import uuid
 
 from oslo_config import cfg
+from oslo_db import api as oslo_db_api
 
+from keystone.common import provider_api
 from keystone.common import sql
 from keystone import exception
 from keystone.identity.backends import base as identity_base
@@ -25,16 +26,26 @@ from keystone.identity.shadow_backends import base
 
 
 CONF = cfg.CONF
+PROVIDERS = provider_api.ProviderAPIs
 
 
 class ShadowUsers(base.ShadowUsersDriverBase):
     @sql.handle_conflicts(conflict_type='federated_user')
-    def create_federated_user(self, domain_id, federated_dict):
+    def create_federated_user(self, domain_id, federated_dict, email=None):
+
+        local_entity = {'domain_id': domain_id,
+                        'local_id': federated_dict['unique_id'],
+                        'entity_type': 'user'}
+
+        public_id = PROVIDERS.id_generator_api.generate_public_ID(local_entity)
+
         user = {
-            'id': uuid.uuid4().hex,
+            'id': public_id,
             'domain_id': domain_id,
             'enabled': True
         }
+        if email:
+            user['email'] = email
         with sql.session_for_write() as session:
             federated_ref = model.FederatedUser.from_dict(federated_dict)
             user_ref = model.User.from_dict(user)
@@ -67,9 +78,20 @@ class ShadowUsers(base.ShadowUsersDriverBase):
 
     def get_federated_users(self, hints):
         with sql.session_for_read() as session:
-            query = session.query(model.User).outerjoin(model.LocalUser)
+            query = session.query(model.User).outerjoin(
+                model.LocalUser).outerjoin(model.FederatedUser)
             query = query.filter(model.User.id == model.FederatedUser.user_id)
             query = self._update_query_with_federated_statements(hints, query)
+            name_filter = None
+            for filter_ in hints.filters:
+                if filter_['name'] == 'name':
+                    name_filter = filter_
+                    query = query.filter(
+                        model.FederatedUser.display_name == name_filter[
+                            'value'])
+                    break
+            if name_filter:
+                hints.filters.remove(name_filter)
             user_refs = sql.filter_limit_query(model.User, query, hints)
             return [identity_base.filter_user(x.to_dict()) for x in user_refs]
 
@@ -130,10 +152,8 @@ class ShadowUsers(base.ShadowUsersDriverBase):
     def create_nonlocal_user(self, user_dict):
         new_user_dict = copy.deepcopy(user_dict)
         # remove local_user attributes from new_user_dict
-        keys_to_delete = ['name', 'password']
-        for key in keys_to_delete:
-            if key in new_user_dict:
-                del new_user_dict[key]
+        new_user_dict.pop('name', None)
+        new_user_dict.pop('password', None)
         # create nonlocal_user dict
         new_nonlocal_user_dict = {
             'name': user_dict['name']
@@ -147,6 +167,17 @@ class ShadowUsers(base.ShadowUsersDriverBase):
             session.add(new_user_ref)
             return identity_base.filter_user(new_user_ref.to_dict())
 
+    @oslo_db_api.wrap_db_retry(retry_on_deadlock=True)
+    def delete_user(self, user_id):
+        with sql.session_for_write() as session:
+            ref = self._get_user(session, user_id)
+
+            q = session.query(model.UserGroupMembership)
+            q = q.filter_by(user_id=user_id)
+            q.delete(False)
+
+            session.delete(ref)
+
     def get_user(self, user_id):
         with sql.session_for_read() as session:
             user_ref = self._get_user(session, user_id)
@@ -157,3 +188,10 @@ class ShadowUsers(base.ShadowUsersDriverBase):
         if not user_ref:
             raise exception.UserNotFound(user_id=user_id)
         return user_ref
+
+    def list_federated_users_info(self, hints=None):
+        with sql.session_for_read() as session:
+            query = session.query(model.FederatedUser)
+            fed_user_refs = sql.filter_limit_query(model.FederatedUser, query,
+                                                   hints)
+            return [x.to_dict() for x in fed_user_refs]

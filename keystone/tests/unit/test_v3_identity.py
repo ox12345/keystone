@@ -23,6 +23,7 @@ from oslo_log import log
 from six.moves import http_client
 from testtools import matchers
 
+from keystone.common import provider_api
 from keystone.common import sql
 import keystone.conf
 from keystone.credential.providers import fernet as credential_fernet
@@ -38,25 +39,7 @@ from keystone.tests.unit import test_v3
 
 
 CONF = keystone.conf.CONF
-
-
-# NOTE(morganfainberg): To be removed when admin_token_auth middleware is
-# removed. This was moved to it's own testcase so it can setup the
-# admin_token_auth pipeline without impacting other tests.
-class IdentityTestCaseStaticAdminToken(test_v3.RestfulTestCase):
-
-    def config_overrides(self):
-        super(IdentityTestCaseStaticAdminToken, self).config_overrides()
-        self.config_fixture.config(
-            admin_token='ADMIN')
-
-    def test_list_users_with_static_admin_token_and_multiple_backends(self):
-        # domain-specific operations with the bootstrap ADMIN token is
-        # disallowed when domain-specific drivers are enabled
-        self.config_fixture.config(group='identity',
-                                   domain_specific_drivers_enabled=True)
-        self.get('/users', token=CONF.admin_token,
-                 expected_status=exception.Unauthorized.code)
+PROVIDERS = provider_api.ProviderAPIs
 
 
 class IdentityTestCase(test_v3.RestfulTestCase):
@@ -73,15 +56,16 @@ class IdentityTestCase(test_v3.RestfulTestCase):
         )
 
         self.group = unit.new_group_ref(domain_id=self.domain_id)
-        self.group = self.identity_api.create_group(self.group)
+        self.group = PROVIDERS.identity_api.create_group(self.group)
         self.group_id = self.group['id']
 
         self.credential = unit.new_credential_ref(
             user_id=self.user['id'],
             project_id=self.project_id)
 
-        self.credential_api.create_credential(self.credential['id'],
-                                              self.credential)
+        PROVIDERS.credential_api.create_credential(
+            self.credential['id'], self.credential
+        )
 
     # user crud tests
 
@@ -104,9 +88,9 @@ class IdentityTestCase(test_v3.RestfulTestCase):
         # Create a user with a role on the domain so we can get a
         # domain scoped token
         domain = unit.new_domain_ref()
-        self.resource_api.create_domain(domain['id'], domain)
-        user = unit.create_user(self.identity_api, domain_id=domain['id'])
-        self.assignment_api.create_grant(
+        PROVIDERS.resource_api.create_domain(domain['id'], domain)
+        user = unit.create_user(PROVIDERS.identity_api, domain_id=domain['id'])
+        PROVIDERS.assignment_api.create_grant(
             role_id=self.role_id, user_id=user['id'],
             domain_id=domain['id'])
 
@@ -170,9 +154,9 @@ class IdentityTestCase(test_v3.RestfulTestCase):
         """
         # Create two domains to work with.
         domain1 = unit.new_domain_ref()
-        self.resource_api.create_domain(domain1['id'], domain1)
+        PROVIDERS.resource_api.create_domain(domain1['id'], domain1)
         domain2 = unit.new_domain_ref()
-        self.resource_api.create_domain(domain2['id'], domain2)
+        PROVIDERS.resource_api.create_domain(domain2['id'], domain2)
 
         # We can successfully create a normal user without any surprises.
         user = unit.new_user_ref(domain_id=domain1['id'])
@@ -249,19 +233,19 @@ class IdentityTestCase(test_v3.RestfulTestCase):
 
         # Create a new domain with a new project and user
         domain = unit.new_domain_ref()
-        self.resource_api.create_domain(domain['id'], domain)
+        PROVIDERS.resource_api.create_domain(domain['id'], domain)
 
         project = unit.new_project_ref(domain_id=domain['id'])
-        self.resource_api.create_project(project['id'], project)
+        PROVIDERS.resource_api.create_project(project['id'], project)
 
-        user = unit.create_user(self.identity_api, domain_id=domain['id'])
+        user = unit.create_user(PROVIDERS.identity_api, domain_id=domain['id'])
 
         # Create both project and domain role grants for the user so we
         # can get both project and domain scoped tokens
-        self.assignment_api.create_grant(
+        PROVIDERS.assignment_api.create_grant(
             role_id=self.role_id, user_id=user['id'],
             domain_id=domain['id'])
-        self.assignment_api.create_grant(
+        PROVIDERS.assignment_api.create_grant(
             role_id=self.role_id, user_id=user['id'],
             project_id=project['id'])
 
@@ -296,7 +280,7 @@ class IdentityTestCase(test_v3.RestfulTestCase):
     def test_list_users_no_default_project(self):
         """Call ``GET /users`` making sure no default_project_id."""
         user = unit.new_user_ref(self.domain_id)
-        user = self.identity_api.create_user(user)
+        user = PROVIDERS.identity_api.create_user(user)
         resource_url = '/users'
         r = self.get(resource_url)
         self.assertValidUserListResponse(r, ref=user,
@@ -314,7 +298,7 @@ class IdentityTestCase(test_v3.RestfulTestCase):
         """Call ``GET /users/{user_id}`` extra attributes are not included."""
         user = unit.new_user_ref(domain_id=self.domain_id,
                                  project_id=self.project_id)
-        user = self.identity_api.create_user(user)
+        user = PROVIDERS.identity_api.create_user(user)
         self.assertNotIn('created_at', user)
         self.assertNotIn('last_active_at', user)
 
@@ -322,7 +306,7 @@ class IdentityTestCase(test_v3.RestfulTestCase):
         """Call ``GET /users/{user_id}`` required attributes are included."""
         user = unit.new_user_ref(domain_id=self.domain_id,
                                  project_id=self.project_id)
-        user = self.identity_api.create_user(user)
+        user = PROVIDERS.identity_api.create_user(user)
         self.assertIn('id', user)
         self.assertIn('name', user)
         self.assertIn('enabled', user)
@@ -334,7 +318,7 @@ class IdentityTestCase(test_v3.RestfulTestCase):
         """Call ``GET /users/{user_id}`` making sure of default_project_id."""
         user = unit.new_user_ref(domain_id=self.domain_id,
                                  project_id=self.project_id)
-        user = self.identity_api.create_user(user)
+        user = PROVIDERS.identity_api.create_user(user)
         r = self.get('/users/%(user_id)s' % {'user_id': user['id']})
         self.assertValidUserResponse(r, user)
 
@@ -345,9 +329,9 @@ class IdentityTestCase(test_v3.RestfulTestCase):
 
     def test_list_head_groups_for_user(self):
         """Call ``GET & HEAD /users/{user_id}/groups``."""
-        user1 = unit.create_user(self.identity_api,
+        user1 = unit.create_user(PROVIDERS.identity_api,
                                  domain_id=self.domain['id'])
-        user2 = unit.create_user(self.identity_api,
+        user2 = unit.create_user(PROVIDERS.identity_api,
                                  domain_id=self.domain['id'])
 
         self.put('/groups/%(group_id)s/users/%(user_id)s' % {
@@ -423,7 +407,7 @@ class IdentityTestCase(test_v3.RestfulTestCase):
 
     def test_admin_password_reset(self):
         # bootstrap a user as admin
-        user_ref = unit.create_user(self.identity_api,
+        user_ref = unit.create_user(PROVIDERS.identity_api,
                                     domain_id=self.domain['id'])
 
         # auth as user should work before a password change
@@ -462,8 +446,27 @@ class IdentityTestCase(test_v3.RestfulTestCase):
         self.config_fixture.config(group='security_compliance',
                                    minimum_password_age=1)
         # create user
-        user_ref = unit.create_user(self.identity_api,
+        user_ref = unit.create_user(PROVIDERS.identity_api,
                                     domain_id=self.domain['id'])
+        # administrative password reset
+        new_password = uuid.uuid4().hex
+        r = self.patch('/users/%s' % user_ref['id'],
+                       body={'user': {'password': new_password}})
+        self.assertValidUserResponse(r, user_ref)
+        # authenticate with new password
+        new_password_auth = self.build_authentication_request(
+            user_id=user_ref['id'],
+            password=new_password)
+        self.v3_create_token(new_password_auth)
+
+    def test_admin_password_reset_with_password_lock(self):
+        # create user
+        user_ref = unit.create_user(PROVIDERS.identity_api,
+                                    domain_id=self.domain['id'])
+        lock_pw_opt = options.LOCK_PASSWORD_OPT.option_name
+        update_user_body = {'user': {'options': {lock_pw_opt: True}}}
+        self.patch('/users/%s' % user_ref['id'], body=update_user_body)
+
         # administrative password reset
         new_password = uuid.uuid4().hex
         r = self.patch('/users/%s' % user_ref['id'],
@@ -482,7 +485,7 @@ class IdentityTestCase(test_v3.RestfulTestCase):
         the `domain_id` of a user fails.
         """
         user = unit.new_user_ref(domain_id=self.domain['id'])
-        user = self.identity_api.create_user(user)
+        user = PROVIDERS.identity_api.create_user(user)
         user['domain_id'] = CONF.identity.default_domain_id
         self.patch('/users/%(user_id)s' % {
             'user_id': user['id']},
@@ -499,16 +502,18 @@ class IdentityTestCase(test_v3.RestfulTestCase):
 
         """
         # First check the credential for this user is present
-        r = self.credential_api.get_credential(self.credential['id'])
+        r = PROVIDERS.credential_api.get_credential(self.credential['id'])
         self.assertDictEqual(self.credential, r)
         # Create a second credential with a different user
 
         user2 = unit.new_user_ref(domain_id=self.domain['id'],
                                   project_id=self.project['id'])
-        user2 = self.identity_api.create_user(user2)
+        user2 = PROVIDERS.identity_api.create_user(user2)
         credential2 = unit.new_credential_ref(user_id=user2['id'],
                                               project_id=self.project['id'])
-        self.credential_api.create_credential(credential2['id'], credential2)
+        PROVIDERS.credential_api.create_credential(
+            credential2['id'], credential2
+        )
 
         # Create a token for this user which we can check later
         # gets deleted
@@ -529,14 +534,10 @@ class IdentityTestCase(test_v3.RestfulTestCase):
         # Deleting the user should have deleted any credentials
         # that reference this project
         self.assertRaises(exception.CredentialNotFound,
-                          self.credential_api.get_credential,
+                          PROVIDERS.credential_api.get_credential,
                           self.credential['id'])
-        # And the no tokens we remain valid
-        tokens = self.token_provider_api._persistence._list_tokens(
-            self.user['id'])
-        self.assertEqual(0, len(tokens))
         # But the credential for user2 is unaffected
-        r = self.credential_api.get_credential(credential2['id'])
+        r = PROVIDERS.credential_api.get_credential(credential2['id'])
         self.assertDictEqual(credential2, r)
 
     def test_delete_user_retries_on_deadlock(self):
@@ -561,11 +562,11 @@ class IdentityTestCase(test_v3.RestfulTestCase):
         side_effect = FakeDeadlock(patcher)
         sql_delete_mock.side_effect = side_effect
 
-        user_ref = unit.create_user(self.identity_api,
+        user_ref = unit.create_user(PROVIDERS.identity_api,
                                     domain_id=self.domain['id'])
 
         try:
-            self.identity_api.delete_user(user_id=user_ref['id'])
+            PROVIDERS.identity_api.delete_user(user_id=user_ref['id'])
         finally:
             if side_effect.patched:
                 patcher.stop()
@@ -653,7 +654,7 @@ class IdentityTestCase(test_v3.RestfulTestCase):
         log_fix = self.useFixture(fixtures.FakeLogger(level=log.DEBUG))
 
         # bootstrap a user as admin
-        user_ref = unit.create_user(self.identity_api,
+        user_ref = unit.create_user(PROVIDERS.identity_api,
                                     domain_id=self.domain['id'])
 
         self.assertNotIn(user_ref['password'], log_fix.output)
@@ -696,7 +697,7 @@ class ChangePasswordTestCase(test_v3.RestfulTestCase):
 
     def setUp(self):
         super(ChangePasswordTestCase, self).setUp()
-        self.user_ref = unit.create_user(self.identity_api,
+        self.user_ref = unit.create_user(PROVIDERS.identity_api,
                                          domain_id=self.domain['id'])
         self.token = self.get_request_token(self.user_ref['password'],
                                             http_client.CREATED)
@@ -729,7 +730,7 @@ class UserSelfServiceChangingPasswordsTestCase(ChangePasswordTestCase):
         user_ref = unit.new_user_ref(domain_id=self.domain_id,
                                      password=password)
         with freezegun.freeze_time(time):
-            self.user_ref = self.identity_api.create_user(user_ref)
+            self.user_ref = PROVIDERS.identity_api.create_user(user_ref)
 
         return password
 
@@ -786,6 +787,59 @@ class UserSelfServiceChangingPasswordsTestCase(ChangePasswordTestCase):
             self.change_password(password=uuid.uuid4().hex,
                                  original_password=new_password,
                                  expected_status=http_client.NO_CONTENT)
+
+    def test_changing_password_with_password_lock(self):
+        password = uuid.uuid4().hex
+        ref = unit.new_user_ref(domain_id=self.domain_id, password=password)
+        response = self.post('/users', body={'user': ref})
+        user_id = response.json_body['user']['id']
+
+        time = datetime.datetime.utcnow()
+        with freezegun.freeze_time(time) as frozen_datetime:
+            # Lock the user's password
+            lock_pw_opt = options.LOCK_PASSWORD_OPT.option_name
+            user_patch = {'user': {'options': {lock_pw_opt: True}}}
+            self.patch('/users/%s' % user_id, body=user_patch)
+
+            # Fail, password is locked
+            new_password = uuid.uuid4().hex
+            body = {
+                'user': {
+                    'original_password': password,
+                    'password': new_password
+                }
+            }
+            path = '/users/%s/password' % user_id
+            self.post(path, body=body, expected_status=http_client.BAD_REQUEST)
+
+            # Unlock the password, and change should work
+            user_patch['user']['options'][lock_pw_opt] = False
+            self.patch('/users/%s' % user_id, body=user_patch)
+
+            path = '/users/%s/password' % user_id
+            self.post(path, body=body, expected_status=http_client.NO_CONTENT)
+
+            frozen_datetime.tick(delta=datetime.timedelta(seconds=1))
+
+            auth_data = self.build_authentication_request(
+                user_id=user_id,
+                password=new_password
+            )
+            self.v3_create_token(
+                auth_data, expected_status=http_client.CREATED
+            )
+
+            path = '/users/%s' % user_id
+            user = self.get(path).json_body['user']
+            self.assertIn(lock_pw_opt, user['options'])
+            self.assertFalse(user['options'][lock_pw_opt])
+
+            # Completely unset the option from the user's reference
+            user_patch['user']['options'][lock_pw_opt] = None
+            self.patch('/users/%s' % user_id, body=user_patch)
+            path = '/users/%s' % user_id
+            user = self.get(path).json_body['user']
+            self.assertNotIn(lock_pw_opt, user['options'])
 
     def test_changing_password_with_missing_original_password_fails(self):
         r = self.change_password(password=uuid.uuid4().hex,
@@ -862,7 +916,7 @@ class UserSelfServiceChangingPasswordsTestCase(ChangePasswordTestCase):
                                    change_password_upon_first_use=True)
 
         # create user
-        self.user_ref = unit.create_user(self.identity_api,
+        self.user_ref = unit.create_user(PROVIDERS.identity_api,
                                          domain_id=self.domain['id'])
 
         # attempt to authenticate with create user password
@@ -885,7 +939,7 @@ class UserSelfServiceChangingPasswordsTestCase(ChangePasswordTestCase):
         # admin reset
         reset_password = uuid.uuid4().hex
         user_password = {'password': reset_password}
-        self.identity_api.update_user(self.user_ref['id'], user_password)
+        PROVIDERS.identity_api.update_user(self.user_ref['id'], user_password)
 
         # attempt to authenticate with admin reset password
         self.get_request_token(reset_password,
@@ -909,7 +963,7 @@ class UserSelfServiceChangingPasswordsTestCase(ChangePasswordTestCase):
         self.user_ref['password'] = reset_password
         ignore_opt_name = options.IGNORE_CHANGE_PASSWORD_OPT.option_name
         self.user_ref['options'][ignore_opt_name] = True
-        self.identity_api.update_user(self.user_ref['id'], self.user_ref)
+        PROVIDERS.identity_api.update_user(self.user_ref['id'], self.user_ref)
 
         # authenticate with the reset password
         self.token = self.get_request_token(reset_password,
@@ -920,13 +974,13 @@ class UserSelfServiceChangingPasswordsTestCase(ChangePasswordTestCase):
                                    lockout_failure_attempts=1)
 
         # create user
-        self.user_ref = unit.create_user(self.identity_api,
+        self.user_ref = unit.create_user(PROVIDERS.identity_api,
                                          domain_id=self.domain['id'])
 
         # update the user, mark her as exempt from lockout
         ignore_opt_name = options.IGNORE_LOCKOUT_ATTEMPT_OPT.option_name
         self.user_ref['options'][ignore_opt_name] = True
-        self.identity_api.update_user(self.user_ref['id'], self.user_ref)
+        PROVIDERS.identity_api.update_user(self.user_ref['id'], self.user_ref)
 
         # fail to auth, this should lockout the user, since we're allowed
         # one failure, but we're exempt from lockout!
@@ -955,7 +1009,7 @@ class PasswordValidationTestCase(ChangePasswordTestCase):
                   expected_status=http_client.BAD_REQUEST)
 
     def test_update_user_with_invalid_password(self):
-        user = unit.create_user(self.identity_api,
+        user = unit.create_user(PROVIDERS.identity_api,
                                 domain_id=self.domain['id'])
         user['password'] = 'simple'
         self.patch('/users/%(user_id)s' % {
@@ -1001,19 +1055,19 @@ class UserFederatedAttributesTests(test_v3.RestfulTestCase):
             'enabled': True,
             'description': uuid.uuid4().hex
         }
-        self.federation_api.create_idp(idp['id'], idp)
+        PROVIDERS.federation_api.create_idp(idp['id'], idp)
         # Create the mapping
         mapping = mapping_fixtures.MAPPING_EPHEMERAL_USER
         mapping['id'] = uuid.uuid4().hex
-        self.federation_api.create_mapping(mapping['id'], mapping)
+        PROVIDERS.federation_api.create_mapping(mapping['id'], mapping)
         # Create the protocol
         protocol = {
             'id': uuid.uuid4().hex,
             'mapping_id': mapping['id']
         }
-        self.federation_api.create_protocol(idp['id'],
-                                            protocol['id'],
-                                            protocol)
+        PROVIDERS.federation_api.create_protocol(
+            idp['id'], protocol['id'], protocol
+        )
         return idp, protocol
 
     def _create_user_with_federated_user(self, user, fed_dict):
@@ -1037,7 +1091,7 @@ class UserFederatedAttributesTests(test_v3.RestfulTestCase):
         self.fed_dict['unique_id'] = "jdoe"
         # Create the domain_id, user, and federated_user relationship
         self.domain = unit.new_domain_ref()
-        self.resource_api.create_domain(self.domain['id'], self.domain)
+        PROVIDERS.resource_api.create_domain(self.domain['id'], self.domain)
         self.fed_user = unit.new_user_ref(domain_id=self.domain['id'])
         self.fed_user = self._create_user_with_federated_user(self.fed_user,
                                                               self.fed_dict)

@@ -6,6 +6,13 @@ Identity service, code-named keystone, on the controller node. For
 scalability purposes, this configuration deploys Fernet tokens and
 the Apache HTTP server to handle requests.
 
+.. note::
+
+   Ensure that you have completed the prerequisite installation steps in the
+   `Openstack Install Guide
+   <https://docs.openstack.org/install-guide/environment-packages-ubuntu.html#finalize-the-installation>`_
+   before proceeding.
+
 Prerequisites
 -------------
 
@@ -53,17 +60,17 @@ Install and configure components
 
 .. note::
 
-   This guide uses the Apache HTTP server with ``mod_wsgi`` to serve
-   Identity service requests on ports 5000 and 35357. By default, the
-   keystone service still listens on these ports. The package handles
-   all of the Apache configuration for you (including the activation of
-   the ``mod_wsgi`` apache2 module and keystone configuration in Apache).
+   This guide uses the Apache HTTP server with ``mod_wsgi`` to serve Identity
+   service requests on port 5000. By default, the keystone service still
+   listens on this port. The package handles all of the Apache configuration
+   for you (including the activation of the ``mod_wsgi`` apache2 module and
+   keystone configuration in Apache).
 
 #. Run the following command to install the packages:
 
    .. code-block:: console
 
-      # apt install keystone  apache2 libapache2-mod-wsgi
+      # apt install keystone
 
    .. end
 
@@ -118,10 +125,17 @@ Install and configure components
 
 5. Bootstrap the Identity service:
 
+   .. note::
+
+      Before the Queens release, keystone needed to be run on two separate ports to
+      accommodate the Identity v2 API which ran a separate admin-only service
+      commonly on port 35357. With the removal of the v2 API, keystone can be run
+      on the same port for all interfaces.
+
    .. code-block:: console
 
       # keystone-manage bootstrap --bootstrap-password ADMIN_PASS \
-        --bootstrap-admin-url http://controller:35357/v3/ \
+        --bootstrap-admin-url http://controller:5000/v3/ \
         --bootstrap-internal-url http://controller:5000/v3/ \
         --bootstrap-public-url http://controller:5000/v3/ \
         --bootstrap-region-id RegionOne
@@ -143,6 +157,14 @@ Configure the Apache HTTP server
 
    .. end
 
+   The ``ServerName`` entry will need to be added if it does not already exist.
+
+SSL
+^^^
+
+A secure deployment should have the web server configured to use SSL or running
+behind an SSL terminator.
+
 Finalize the installation
 -------------------------
 
@@ -154,7 +176,7 @@ Finalize the installation
 
    .. end
 
-2. Configure the administrative account
+2. Configure the administrative account by setting the proper environmental variables:
 
    .. code-block:: console
 
@@ -163,10 +185,12 @@ Finalize the installation
       $ export OS_PROJECT_NAME=admin
       $ export OS_USER_DOMAIN_NAME=Default
       $ export OS_PROJECT_DOMAIN_NAME=Default
-      $ export OS_AUTH_URL=http://controller:35357/v3
+      $ export OS_AUTH_URL=http://controller:5000/v3
       $ export OS_IDENTITY_API_VERSION=3
 
    .. end
+
+   These values shown here are the default ones created from ``keystone-manage bootstrap``.
 
    Replace ``ADMIN_PASS`` with the password used in the
    ``keystone-manage bootstrap`` command in `keystone-install-configure-ubuntu`_.

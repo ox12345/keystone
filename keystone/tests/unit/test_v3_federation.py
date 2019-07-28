@@ -13,11 +13,13 @@
 import copy
 import os
 import random
+import re
 import subprocess
 from testtools import matchers
 import uuid
 
 import fixtures
+import flask
 from lxml import etree
 import mock
 from oslo_serialization import jsonutils
@@ -31,11 +33,15 @@ xmldsig = importutils.try_import("saml2.xmldsig")
 if not xmldsig:
     xmldsig = importutils.try_import("xmldsig")
 
-from keystone.auth import controllers as auth_controllers
+from keystone.api._shared import authentication
+from keystone.api import auth as auth_api
+from keystone.common import driver_hints
+from keystone.common import provider_api
+from keystone.common import render_token
 import keystone.conf
 from keystone import exception
-from keystone.federation import controllers as federation_controllers
 from keystone.federation import idp as keystone_idp
+from keystone.models import token_model
 from keystone import notifications
 from keystone.tests import unit
 from keystone.tests.unit import core
@@ -43,11 +49,10 @@ from keystone.tests.unit import federation_fixtures
 from keystone.tests.unit import ksfixtures
 from keystone.tests.unit import mapping_fixtures
 from keystone.tests.unit import test_v3
-from keystone.tests.unit import utils
-from keystone.token.providers import common as token_common
 
 
 CONF = keystone.conf.CONF
+PROVIDERS = provider_api.ProviderAPIs
 ROOTDIR = os.path.dirname(os.path.abspath(__file__))
 XMLDIR = os.path.join(ROOTDIR, 'saml2/')
 
@@ -79,8 +84,9 @@ class FederatedSetupMixin(object):
     }
 
     def _check_domains_are_valid(self, token):
-        self.assertEqual('Federated', token['user']['domain']['id'])
-        self.assertEqual('Federated', token['user']['domain']['name'])
+        domain = PROVIDERS.resource_api.get_domain(self.idp['domain_id'])
+        self.assertEqual(domain['id'], token['user']['domain']['id'])
+        self.assertEqual(domain['name'], token['user']['domain']['name'])
 
     def _project(self, project):
         return (project['id'], project['name'])
@@ -146,13 +152,13 @@ class FederatedSetupMixin(object):
                               idp=None,
                               assertion='EMPLOYEE_ASSERTION',
                               environment=None):
-        api = federation_controllers.Auth()
         environment = environment or {}
         environment.update(getattr(mapping_fixtures, assertion))
-        request = self.make_request(environ=environment)
-        if idp is None:
-            idp = self.IDP
-        r = api.federated_authentication(request, idp, self.PROTOCOL)
+        with self.make_request(environ=environment):
+            if idp is None:
+                idp = self.IDP
+            r = authentication.federated_authenticate_for_token(
+                protocol_id=self.PROTOCOL, identity_provider=idp)
         return r
 
     def idp_ref(self, id=None):
@@ -195,137 +201,163 @@ class FederatedSetupMixin(object):
             }
         }
 
-    def _inject_assertion(self, request, variant):
+    def _inject_assertion(self, variant):
         assertion = getattr(mapping_fixtures, variant)
-        request.context_dict['environment'].update(assertion)
+        flask.request.environ.update(assertion)
 
     def load_federation_sample_data(self):
         """Inject additional data."""
         # Create and add domains
         self.domainA = unit.new_domain_ref()
-        self.resource_api.create_domain(self.domainA['id'],
-                                        self.domainA)
+        PROVIDERS.resource_api.create_domain(
+            self.domainA['id'], self.domainA
+        )
 
         self.domainB = unit.new_domain_ref()
-        self.resource_api.create_domain(self.domainB['id'],
-                                        self.domainB)
+        PROVIDERS.resource_api.create_domain(
+            self.domainB['id'], self.domainB
+        )
 
         self.domainC = unit.new_domain_ref()
-        self.resource_api.create_domain(self.domainC['id'],
-                                        self.domainC)
+        PROVIDERS.resource_api.create_domain(
+            self.domainC['id'], self.domainC
+        )
 
         self.domainD = unit.new_domain_ref()
-        self.resource_api.create_domain(self.domainD['id'],
-                                        self.domainD)
+        PROVIDERS.resource_api.create_domain(
+            self.domainD['id'], self.domainD
+        )
 
         # Create and add projects
         self.proj_employees = unit.new_project_ref(
             domain_id=self.domainA['id'])
-        self.resource_api.create_project(self.proj_employees['id'],
-                                         self.proj_employees)
+        PROVIDERS.resource_api.create_project(
+            self.proj_employees['id'], self.proj_employees
+        )
         self.proj_customers = unit.new_project_ref(
             domain_id=self.domainA['id'])
-        self.resource_api.create_project(self.proj_customers['id'],
-                                         self.proj_customers)
+        PROVIDERS.resource_api.create_project(
+            self.proj_customers['id'], self.proj_customers
+        )
 
         self.project_all = unit.new_project_ref(
             domain_id=self.domainA['id'])
-        self.resource_api.create_project(self.project_all['id'],
-                                         self.project_all)
+        PROVIDERS.resource_api.create_project(
+            self.project_all['id'], self.project_all
+        )
 
         self.project_inherited = unit.new_project_ref(
             domain_id=self.domainD['id'])
-        self.resource_api.create_project(self.project_inherited['id'],
-                                         self.project_inherited)
+        PROVIDERS.resource_api.create_project(
+            self.project_inherited['id'], self.project_inherited
+        )
 
         # Create and add groups
         self.group_employees = unit.new_group_ref(domain_id=self.domainA['id'])
         self.group_employees = (
-            self.identity_api.create_group(self.group_employees))
+            PROVIDERS.identity_api.create_group(self.group_employees))
 
         self.group_customers = unit.new_group_ref(domain_id=self.domainA['id'])
         self.group_customers = (
-            self.identity_api.create_group(self.group_customers))
+            PROVIDERS.identity_api.create_group(self.group_customers))
 
         self.group_admins = unit.new_group_ref(domain_id=self.domainA['id'])
-        self.group_admins = self.identity_api.create_group(self.group_admins)
+        self.group_admins = PROVIDERS.identity_api.create_group(
+            self.group_admins
+        )
 
         # Create and add roles
         self.role_employee = unit.new_role_ref()
-        self.role_api.create_role(self.role_employee['id'], self.role_employee)
+        PROVIDERS.role_api.create_role(
+            self.role_employee['id'], self.role_employee
+        )
         self.role_customer = unit.new_role_ref()
-        self.role_api.create_role(self.role_customer['id'], self.role_customer)
+        PROVIDERS.role_api.create_role(
+            self.role_customer['id'], self.role_customer
+        )
 
         self.role_admin = unit.new_role_ref()
-        self.role_api.create_role(self.role_admin['id'], self.role_admin)
+        PROVIDERS.role_api.create_role(self.role_admin['id'], self.role_admin)
 
         # Employees can access
         # * proj_employees
         # * project_all
-        self.assignment_api.create_grant(self.role_employee['id'],
-                                         group_id=self.group_employees['id'],
-                                         project_id=self.proj_employees['id'])
-        self.assignment_api.create_grant(self.role_employee['id'],
-                                         group_id=self.group_employees['id'],
-                                         project_id=self.project_all['id'])
+        PROVIDERS.assignment_api.create_grant(
+            self.role_employee['id'], group_id=self.group_employees['id'],
+            project_id=self.proj_employees['id']
+        )
+        PROVIDERS.assignment_api.create_grant(
+            self.role_employee['id'], group_id=self.group_employees['id'],
+            project_id=self.project_all['id']
+        )
         # Customers can access
         # * proj_customers
-        self.assignment_api.create_grant(self.role_customer['id'],
-                                         group_id=self.group_customers['id'],
-                                         project_id=self.proj_customers['id'])
+        PROVIDERS.assignment_api.create_grant(
+            self.role_customer['id'], group_id=self.group_customers['id'],
+            project_id=self.proj_customers['id']
+        )
 
         # Admins can access:
         # * proj_customers
         # * proj_employees
         # * project_all
-        self.assignment_api.create_grant(self.role_admin['id'],
-                                         group_id=self.group_admins['id'],
-                                         project_id=self.proj_customers['id'])
-        self.assignment_api.create_grant(self.role_admin['id'],
-                                         group_id=self.group_admins['id'],
-                                         project_id=self.proj_employees['id'])
-        self.assignment_api.create_grant(self.role_admin['id'],
-                                         group_id=self.group_admins['id'],
-                                         project_id=self.project_all['id'])
+        PROVIDERS.assignment_api.create_grant(
+            self.role_admin['id'], group_id=self.group_admins['id'],
+            project_id=self.proj_customers['id']
+        )
+        PROVIDERS.assignment_api.create_grant(
+            self.role_admin['id'], group_id=self.group_admins['id'],
+            project_id=self.proj_employees['id']
+        )
+        PROVIDERS.assignment_api.create_grant(
+            self.role_admin['id'], group_id=self.group_admins['id'],
+            project_id=self.project_all['id']
+        )
 
         # Customers can access:
         # * domain A
-        self.assignment_api.create_grant(self.role_customer['id'],
-                                         group_id=self.group_customers['id'],
-                                         domain_id=self.domainA['id'])
+        PROVIDERS.assignment_api.create_grant(
+            self.role_customer['id'], group_id=self.group_customers['id'],
+            domain_id=self.domainA['id']
+        )
 
         # Customers can access projects via inheritance:
         # * domain D
-        self.assignment_api.create_grant(self.role_customer['id'],
-                                         group_id=self.group_customers['id'],
-                                         domain_id=self.domainD['id'],
-                                         inherited_to_projects=True)
+        PROVIDERS.assignment_api.create_grant(
+            self.role_customer['id'], group_id=self.group_customers['id'],
+            domain_id=self.domainD['id'], inherited_to_projects=True
+        )
 
         # Employees can access:
         # * domain A
         # * domain B
 
-        self.assignment_api.create_grant(self.role_employee['id'],
-                                         group_id=self.group_employees['id'],
-                                         domain_id=self.domainA['id'])
-        self.assignment_api.create_grant(self.role_employee['id'],
-                                         group_id=self.group_employees['id'],
-                                         domain_id=self.domainB['id'])
+        PROVIDERS.assignment_api.create_grant(
+            self.role_employee['id'], group_id=self.group_employees['id'],
+            domain_id=self.domainA['id']
+        )
+        PROVIDERS.assignment_api.create_grant(
+            self.role_employee['id'], group_id=self.group_employees['id'],
+            domain_id=self.domainB['id']
+        )
 
         # Admins can access:
         # * domain A
         # * domain B
         # * domain C
-        self.assignment_api.create_grant(self.role_admin['id'],
-                                         group_id=self.group_admins['id'],
-                                         domain_id=self.domainA['id'])
-        self.assignment_api.create_grant(self.role_admin['id'],
-                                         group_id=self.group_admins['id'],
-                                         domain_id=self.domainB['id'])
+        PROVIDERS.assignment_api.create_grant(
+            self.role_admin['id'], group_id=self.group_admins['id'],
+            domain_id=self.domainA['id']
+        )
+        PROVIDERS.assignment_api.create_grant(
+            self.role_admin['id'], group_id=self.group_admins['id'],
+            domain_id=self.domainB['id']
+        )
 
-        self.assignment_api.create_grant(self.role_admin['id'],
-                                         group_id=self.group_admins['id'],
-                                         domain_id=self.domainC['id'])
+        PROVIDERS.assignment_api.create_grant(
+            self.role_admin['id'], group_id=self.group_admins['id'],
+            domain_id=self.domainC['id']
+        )
         self.rules = {
             'rules': [
                 {
@@ -706,81 +738,89 @@ class FederatedSetupMixin(object):
 
         # Add IDP
         self.idp = self.idp_ref(id=self.IDP)
-        self.federation_api.create_idp(self.idp['id'],
-                                       self.idp)
+        PROVIDERS.federation_api.create_idp(
+            self.idp['id'], self.idp
+        )
         # Add IDP with remote
         self.idp_with_remote = self.idp_ref(id=self.IDP_WITH_REMOTE)
         self.idp_with_remote['remote_ids'] = self.REMOTE_IDS
-        self.federation_api.create_idp(self.idp_with_remote['id'],
-                                       self.idp_with_remote)
+        PROVIDERS.federation_api.create_idp(
+            self.idp_with_remote['id'], self.idp_with_remote
+        )
         # Add a mapping
         self.mapping = self.mapping_ref()
-        self.federation_api.create_mapping(self.mapping['id'],
-                                           self.mapping)
+        PROVIDERS.federation_api.create_mapping(
+            self.mapping['id'], self.mapping
+        )
         # Add protocols
         self.proto_saml = self.proto_ref(mapping_id=self.mapping['id'])
         self.proto_saml['id'] = self.PROTOCOL
-        self.federation_api.create_protocol(self.idp['id'],
-                                            self.proto_saml['id'],
-                                            self.proto_saml)
+        PROVIDERS.federation_api.create_protocol(
+            self.idp['id'], self.proto_saml['id'], self.proto_saml
+        )
         # Add protocols IDP with remote
-        self.federation_api.create_protocol(self.idp_with_remote['id'],
-                                            self.proto_saml['id'],
-                                            self.proto_saml)
-        # Generate fake tokens
-        request = self.make_request()
+        PROVIDERS.federation_api.create_protocol(
+            self.idp_with_remote['id'], self.proto_saml['id'], self.proto_saml
+        )
 
-        self.tokens = {}
-        VARIANTS = ('EMPLOYEE_ASSERTION', 'CUSTOMER_ASSERTION',
-                    'ADMIN_ASSERTION')
-        api = auth_controllers.Auth()
-        for variant in VARIANTS:
-            self._inject_assertion(request, variant)
-            r = api.authenticate_for_token(request, self.UNSCOPED_V3_SAML2_REQ)
-            self.tokens[variant] = r.headers.get('X-Subject-Token')
+        with self.make_request():
+            self.tokens = {}
+            VARIANTS = ('EMPLOYEE_ASSERTION', 'CUSTOMER_ASSERTION',
+                        'ADMIN_ASSERTION')
+            for variant in VARIANTS:
+                self._inject_assertion(variant)
+                r = authentication.authenticate_for_token(
+                    self.UNSCOPED_V3_SAML2_REQ)
+                self.tokens[variant] = r.id
 
-        self.TOKEN_SCOPE_PROJECT_FROM_NONEXISTENT_TOKEN = self._scope_request(
-            uuid.uuid4().hex, 'project', self.proj_customers['id'])
+            self.TOKEN_SCOPE_PROJECT_FROM_NONEXISTENT_TOKEN = (
+                self._scope_request(
+                    uuid.uuid4().hex, 'project', self.proj_customers['id']))
 
-        self.TOKEN_SCOPE_PROJECT_EMPLOYEE_FROM_EMPLOYEE = self._scope_request(
-            self.tokens['EMPLOYEE_ASSERTION'], 'project',
-            self.proj_employees['id'])
+            self.TOKEN_SCOPE_PROJECT_EMPLOYEE_FROM_EMPLOYEE = (
+                self._scope_request(
+                    self.tokens['EMPLOYEE_ASSERTION'], 'project',
+                    self.proj_employees['id']))
 
-        self.TOKEN_SCOPE_PROJECT_EMPLOYEE_FROM_ADMIN = self._scope_request(
-            self.tokens['ADMIN_ASSERTION'], 'project',
-            self.proj_employees['id'])
+            self.TOKEN_SCOPE_PROJECT_EMPLOYEE_FROM_ADMIN = self._scope_request(
+                self.tokens['ADMIN_ASSERTION'], 'project',
+                self.proj_employees['id'])
 
-        self.TOKEN_SCOPE_PROJECT_CUSTOMER_FROM_ADMIN = self._scope_request(
-            self.tokens['ADMIN_ASSERTION'], 'project',
-            self.proj_customers['id'])
+            self.TOKEN_SCOPE_PROJECT_CUSTOMER_FROM_ADMIN = self._scope_request(
+                self.tokens['ADMIN_ASSERTION'], 'project',
+                self.proj_customers['id'])
 
-        self.TOKEN_SCOPE_PROJECT_EMPLOYEE_FROM_CUSTOMER = self._scope_request(
-            self.tokens['CUSTOMER_ASSERTION'], 'project',
-            self.proj_employees['id'])
+            self.TOKEN_SCOPE_PROJECT_EMPLOYEE_FROM_CUSTOMER = (
+                self._scope_request(
+                    self.tokens['CUSTOMER_ASSERTION'], 'project',
+                    self.proj_employees['id']))
 
-        self.TOKEN_SCOPE_PROJECT_INHERITED_FROM_CUSTOMER = self._scope_request(
-            self.tokens['CUSTOMER_ASSERTION'], 'project',
-            self.project_inherited['id'])
+            self.TOKEN_SCOPE_PROJECT_INHERITED_FROM_CUSTOMER = (
+                self._scope_request(
+                    self.tokens['CUSTOMER_ASSERTION'], 'project',
+                    self.project_inherited['id']))
 
-        self.TOKEN_SCOPE_DOMAIN_A_FROM_CUSTOMER = self._scope_request(
-            self.tokens['CUSTOMER_ASSERTION'], 'domain', self.domainA['id'])
+            self.TOKEN_SCOPE_DOMAIN_A_FROM_CUSTOMER = self._scope_request(
+                self.tokens['CUSTOMER_ASSERTION'], 'domain',
+                self.domainA['id'])
 
-        self.TOKEN_SCOPE_DOMAIN_B_FROM_CUSTOMER = self._scope_request(
-            self.tokens['CUSTOMER_ASSERTION'], 'domain',
-            self.domainB['id'])
+            self.TOKEN_SCOPE_DOMAIN_B_FROM_CUSTOMER = self._scope_request(
+                self.tokens['CUSTOMER_ASSERTION'], 'domain',
+                self.domainB['id'])
 
-        self.TOKEN_SCOPE_DOMAIN_D_FROM_CUSTOMER = self._scope_request(
-            self.tokens['CUSTOMER_ASSERTION'], 'domain', self.domainD['id'])
+            self.TOKEN_SCOPE_DOMAIN_D_FROM_CUSTOMER = self._scope_request(
+                self.tokens['CUSTOMER_ASSERTION'], 'domain',
+                self.domainD['id'])
 
-        self.TOKEN_SCOPE_DOMAIN_A_FROM_ADMIN = self._scope_request(
-            self.tokens['ADMIN_ASSERTION'], 'domain', self.domainA['id'])
+            self.TOKEN_SCOPE_DOMAIN_A_FROM_ADMIN = self._scope_request(
+                self.tokens['ADMIN_ASSERTION'], 'domain', self.domainA['id'])
 
-        self.TOKEN_SCOPE_DOMAIN_B_FROM_ADMIN = self._scope_request(
-            self.tokens['ADMIN_ASSERTION'], 'domain', self.domainB['id'])
+            self.TOKEN_SCOPE_DOMAIN_B_FROM_ADMIN = self._scope_request(
+                self.tokens['ADMIN_ASSERTION'], 'domain', self.domainB['id'])
 
-        self.TOKEN_SCOPE_DOMAIN_C_FROM_ADMIN = self._scope_request(
-            self.tokens['ADMIN_ASSERTION'], 'domain',
-            self.domainC['id'])
+            self.TOKEN_SCOPE_DOMAIN_C_FROM_ADMIN = self._scope_request(
+                self.tokens['ADMIN_ASSERTION'], 'domain',
+                self.domainC['id'])
 
 
 class FederatedIdentityProviderTests(test_v3.RestfulTestCase):
@@ -870,7 +910,7 @@ class FederatedIdentityProviderTests(test_v3.RestfulTestCase):
                  expected_status=http_client.CREATED)
 
     def assertIdpDomainCreated(self, idp_id, domain_id):
-        domain = self.resource_api.get_domain(domain_id)
+        domain = PROVIDERS.resource_api.get_domain(domain_id)
         self.assertEqual(domain_id, domain['name'])
         self.assertIn(idp_id, domain['description'])
 
@@ -892,7 +932,7 @@ class FederatedIdentityProviderTests(test_v3.RestfulTestCase):
         body = self.default_body.copy()
         body['description'] = uuid.uuid4().hex
         domain = unit.new_domain_ref()
-        self.resource_api.create_domain(domain['id'], domain)
+        PROVIDERS.resource_api.create_domain(domain['id'], domain)
         body['domain_id'] = domain['id']
         resp = self._create_default_idp(body=body)
         self.assertValidResponse(resp, 'identity_provider', dummy_validator,
@@ -916,7 +956,7 @@ class FederatedIdentityProviderTests(test_v3.RestfulTestCase):
         # the number of domains.
         resp = self._create_default_idp()
         idp_id = resp.json_body['identity_provider']['id']
-        domains = self.resource_api.list_domains()
+        domains = PROVIDERS.resource_api.list_domains()
         number_of_domains = len(domains)
 
         # Create an identity provider with the same ID to intentionally cause a
@@ -930,13 +970,13 @@ class FederatedIdentityProviderTests(test_v3.RestfulTestCase):
             body={'identity_provider': self.default_body.copy()},
             expected_status=http_client.CONFLICT
         )
-        domains = self.resource_api.list_domains()
+        domains = PROVIDERS.resource_api.list_domains()
         self.assertEqual(number_of_domains, len(domains))
 
     def test_conflicting_idp_does_not_delete_existing_domain(self):
         # Create a new domain
         domain = unit.new_domain_ref()
-        self.resource_api.create_domain(domain['id'], domain)
+        PROVIDERS.resource_api.create_domain(domain['id'], domain)
 
         # Create an identity provider and specify the domain
         body = self.default_body.copy()
@@ -960,20 +1000,20 @@ class FederatedIdentityProviderTests(test_v3.RestfulTestCase):
 
         # Make sure the domain specified in the second request was not deleted,
         # since it wasn't auto-generated
-        self.assertIsNotNone(self.resource_api.get_domain(domain['id']))
+        self.assertIsNotNone(PROVIDERS.resource_api.get_domain(domain['id']))
 
-    def test_create_idp_domain_id_unique_constraint(self):
+    def test_create_multi_idp_to_one_domain(self):
         # create domain and add domain_id to keys to check
         domain = unit.new_domain_ref()
-        self.resource_api.create_domain(domain['id'], domain)
+        PROVIDERS.resource_api.create_domain(domain['id'], domain)
         keys_to_check = list(self.idp_keys)
         keys_to_check.append('domain_id')
         # create idp with the domain_id
         body = self.default_body.copy()
         body['description'] = uuid.uuid4().hex
         body['domain_id'] = domain['id']
-        resp = self._create_default_idp(body=body)
-        self.assertValidResponse(resp, 'identity_provider', dummy_validator,
+        idp1 = self._create_default_idp(body=body)
+        self.assertValidResponse(idp1, 'identity_provider', dummy_validator,
                                  keys_to_check=keys_to_check,
                                  ref=body)
         # create a 2nd idp with the same domain_id
@@ -981,11 +1021,14 @@ class FederatedIdentityProviderTests(test_v3.RestfulTestCase):
         body = self.default_body.copy()
         body['description'] = uuid.uuid4().hex
         body['domain_id'] = domain['id']
-        resp = self.put(url, body={'identity_provider': body},
-                        expected_status=http_client.CONFLICT)
-        resp_data = jsonutils.loads(resp.body)
-        self.assertIn('Duplicate entry',
-                      resp_data.get('error', {}).get('message'))
+        idp2 = self.put(url, body={'identity_provider': body},
+                        expected_status=http_client.CREATED)
+        self.assertValidResponse(idp2, 'identity_provider', dummy_validator,
+                                 keys_to_check=keys_to_check,
+                                 ref=body)
+
+        self.assertEqual(idp1.result['identity_provider']['domain_id'],
+                         idp2.result['identity_provider']['domain_id'])
 
     def test_cannot_update_idp_domain(self):
         # create new idp
@@ -997,7 +1040,7 @@ class FederatedIdentityProviderTests(test_v3.RestfulTestCase):
         self.assertIsNotNone(idp_id)
         # create domain and try to update the idp's domain
         domain = unit.new_domain_ref()
-        self.resource_api.create_domain(domain['id'], domain)
+        PROVIDERS.resource_api.create_domain(domain['id'], domain)
         body['domain_id'] = domain['id']
         body = {'identity_provider': body}
         url = self.base_url(suffix=idp_id)
@@ -1263,7 +1306,7 @@ class FederatedIdentityProviderTests(test_v3.RestfulTestCase):
         url = self.base_url(suffix=uuid.uuid4().hex)
         body = self._http_idp_input()
         domain = unit.new_domain_ref()
-        self.resource_api.create_domain(domain['id'], domain)
+        PROVIDERS.resource_api.create_domain(domain['id'], domain)
         body['domain_id'] = domain['id']
         self.put(url, body={'identity_provider': body},
                  expected_status=http_client.CREATED)
@@ -1278,7 +1321,7 @@ class FederatedIdentityProviderTests(test_v3.RestfulTestCase):
         """Create and later fetch IdP."""
         body = self._http_idp_input()
         domain = unit.new_domain_ref()
-        self.resource_api.create_domain(domain['id'], domain)
+        PROVIDERS.resource_api.create_domain(domain['id'], domain)
         body['domain_id'] = domain['id']
         default_resp = self._create_default_idp(body=body)
         default_idp = self._fetch_attribute_from_response(default_resp,
@@ -1342,10 +1385,14 @@ class FederatedIdentityProviderTests(test_v3.RestfulTestCase):
             **kwargs)
 
         # removing IdP will remove the assigned protocol as well
-        self.assertEqual(1, len(self.federation_api.list_protocols(idp_id)))
+        self.assertEqual(
+            1, len(PROVIDERS.federation_api.list_protocols(idp_id))
+        )
         self.delete(idp_url)
         self.get(idp_url, expected_status=http_client.NOT_FOUND)
-        self.assertEqual(0, len(self.federation_api.list_protocols(idp_id)))
+        self.assertEqual(
+            0, len(PROVIDERS.federation_api.list_protocols(idp_id))
+        )
 
     def test_delete_nonexisting_idp(self):
         """Delete nonexisting IdP.
@@ -1481,6 +1528,54 @@ class FederatedIdentityProviderTests(test_v3.RestfulTestCase):
                                      validate=False,
                                      **kwargs)
 
+    def test_crud_protocol_without_protocol_id_in_url(self):
+        # NOTE(morgan): This test is redundant but is added to ensure
+        # the url routing error in bug 1817313 is explicitly covered.
+        # create a protocol, but do not put the ID in the URL
+        idp_id, _ = self._create_and_decapsulate_response()
+        mapping_id = uuid.uuid4().hex
+        self._create_mapping(mapping_id=mapping_id)
+        protocol = {
+            'id': uuid.uuid4().hex,
+            'mapping_id': mapping_id
+        }
+        with self.test_client() as c:
+            token = self.get_scoped_token()
+            # DELETE/PATCH/PUT on non-trailing `/` results in
+            # METHOD_NOT_ALLOWED
+            c.delete('/v3/OS-FEDERATION/identity_providers/%(idp_id)s'
+                     '/protocols' % {'idp_id': idp_id},
+                     headers={'X-Auth-Token': token},
+                     expected_status_code=http_client.METHOD_NOT_ALLOWED)
+            c.patch('/v3/OS-FEDERATION/identity_providers/%(idp_id)s'
+                    '/protocols/' % {'idp_id': idp_id},
+                    json={'protocol': protocol},
+                    headers={'X-Auth-Token': token},
+                    expected_status_code=http_client.METHOD_NOT_ALLOWED)
+            c.put('/v3/OS-FEDERATION/identity_providers/%(idp_id)s'
+                  '/protocols' % {'idp_id': idp_id},
+                  json={'protocol': protocol},
+                  headers={'X-Auth-Token': token},
+                  expected_status_code=http_client.METHOD_NOT_ALLOWED)
+
+            # DELETE/PATCH/PUT should raise 405 with trailing '/', it is
+            # remapped to without the trailing '/' by the normalization
+            # middleware.
+            c.delete('/v3/OS-FEDERATION/identity_providers/%(idp_id)s'
+                     '/protocols/' % {'idp_id': idp_id},
+                     headers={'X-Auth-Token': token},
+                     expected_status_code=http_client.METHOD_NOT_ALLOWED)
+            c.patch('/v3/OS-FEDERATION/identity_providers/%(idp_id)s'
+                    '/protocols/' % {'idp_id': idp_id},
+                    json={'protocol': protocol},
+                    headers={'X-Auth-Token': token},
+                    expected_status_code=http_client.METHOD_NOT_ALLOWED)
+            c.put('/v3/OS-FEDERATION/identity_providers/%(idp_id)s'
+                  '/protocols/' % {'idp_id': idp_id},
+                  json={'protocol': protocol},
+                  headers={'X-Auth-Token': token},
+                  expected_status_code=http_client.METHOD_NOT_ALLOWED)
+
     def test_get_head_protocol(self):
         """Create and later fetch protocol tied to IdP."""
         resp, idp_id, proto = self._assign_protocol_to_idp(
@@ -1557,7 +1652,7 @@ class FederatedIdentityProviderTests(test_v3.RestfulTestCase):
         deleted.
 
         """
-        url = self.base_url(suffix='/%(idp_id)s/'
+        url = self.base_url(suffix='%(idp_id)s/'
                                    'protocols/%(protocol_id)s')
         resp, idp_id, proto = self._assign_protocol_to_idp(
             expected_status=http_client.CREATED)
@@ -1827,7 +1922,7 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         super(FederatedTokenTests, self).setUp()
         self._notifications = []
 
-        def fake_saml_notify(action, request, user_id, group_ids,
+        def fake_saml_notify(action, user_id, group_ids,
                              identity_provider, protocol, token_id, outcome):
             note = {
                 'action': action,
@@ -1863,8 +1958,79 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
 
     def test_issue_unscoped_token(self):
         r = self._issue_unscoped_token()
-        self.assertIsNotNone(r.headers.get('X-Subject-Token'))
-        self.assertValidMappedUser(r.json['token'])
+        token_resp = render_token.render_token_response_from_model(r)['token']
+        self.assertValidMappedUser(token_resp)
+
+    def test_default_domain_scoped_token(self):
+        # Make sure federated users can get tokens scoped to the default
+        # domain, which has a non-uuid ID by default (e.g., `default`). We want
+        # to make sure the token provider handles string types properly if the
+        # ID isn't compressed into byte format during validation. Turn off
+        # cache on issue so that we validate the token online right after we
+        # get it to make sure the token provider is called.
+        self.config_fixture.config(group='token', cache_on_issue=False)
+
+        # Grab an unscoped token to get a domain-scoped token with.
+        token = self._issue_unscoped_token()
+
+        # Give the user a direct role assignment on the default domain, so they
+        # can get a federated domain-scoped token.
+        PROVIDERS.assignment_api.create_grant(
+            self.role_admin['id'], user_id=token.user_id,
+            domain_id=CONF.identity.default_domain_id
+        )
+
+        # Get a token scoped to the default domain with an ID of `default`,
+        # which isn't a uuid type, but we should be able to handle it
+        # accordingly in the token formatters/providers.
+        auth_request = {
+            'auth': {
+                'identity': {
+                    'methods': [
+                        'token'
+                    ],
+                    'token': {
+                        'id': token.id
+                    }
+                },
+                'scope': {
+                    'domain': {
+                        'id': CONF.identity.default_domain_id
+                    }
+                }
+            }
+        }
+        r = self.v3_create_token(auth_request)
+        domain_scoped_token_id = r.headers.get('X-Subject-Token')
+
+        # Validate the token to make sure the token providers handle non-uuid
+        # domain IDs properly.
+        headers = {'X-Subject-Token': domain_scoped_token_id}
+        self.get(
+            '/auth/tokens',
+            token=domain_scoped_token_id,
+            headers=headers
+        )
+
+    def test_issue_the_same_unscoped_token_with_user_deleted(self):
+        r = self._issue_unscoped_token()
+        token = render_token.render_token_response_from_model(r)['token']
+        user1 = token['user']
+        user_id1 = user1.pop('id')
+
+        # delete the referenced user, and authenticate again. Keystone should
+        # create another new shadow user.
+        PROVIDERS.identity_api.delete_user(user_id1)
+
+        r = self._issue_unscoped_token()
+        token = render_token.render_token_response_from_model(r)['token']
+        user2 = token['user']
+        user_id2 = user2.pop('id')
+
+        # Only the user_id is different. Other properties include
+        # identity_provider, protocol, groups and domain are the same.
+        self.assertIsNot(user_id2, user_id1)
+        self.assertEqual(user1, user2)
 
     def test_issue_unscoped_token_disabled_idp(self):
         """Check if authentication works with disabled identity providers.
@@ -1876,50 +2042,44 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
 
         """
         enabled_false = {'enabled': False}
-        self.federation_api.update_idp(self.IDP, enabled_false)
+        PROVIDERS.federation_api.update_idp(self.IDP, enabled_false)
         self.assertRaises(exception.Forbidden,
                           self._issue_unscoped_token)
 
     def test_issue_unscoped_token_group_names_in_mapping(self):
         r = self._issue_unscoped_token(assertion='ANOTHER_CUSTOMER_ASSERTION')
         ref_groups = set([self.group_customers['id'], self.group_admins['id']])
-        token_resp = r.json_body
-        token_groups = token_resp['token']['user']['OS-FEDERATION']['groups']
+        token_groups = r.federated_groups
         token_groups = set([group['id'] for group in token_groups])
         self.assertEqual(ref_groups, token_groups)
 
     def test_issue_unscoped_tokens_nonexisting_group(self):
-        self.assertRaises(exception.MappedGroupNotFound,
-                          self._issue_unscoped_token,
-                          assertion='ANOTHER_TESTER_ASSERTION')
+        self._issue_unscoped_token(assertion='ANOTHER_TESTER_ASSERTION')
 
     def test_issue_unscoped_token_with_remote_no_attribute(self):
-        r = self._issue_unscoped_token(idp=self.IDP_WITH_REMOTE,
-                                       environment={
-                                           self.REMOTE_ID_ATTR:
-                                               self.REMOTE_IDS[0]
-                                       })
-        self.assertIsNotNone(r.headers.get('X-Subject-Token'))
+        self._issue_unscoped_token(idp=self.IDP_WITH_REMOTE,
+                                   environment={
+                                       self.REMOTE_ID_ATTR:
+                                           self.REMOTE_IDS[0]
+                                   })
 
     def test_issue_unscoped_token_with_remote(self):
         self.config_fixture.config(group='federation',
                                    remote_id_attribute=self.REMOTE_ID_ATTR)
-        r = self._issue_unscoped_token(idp=self.IDP_WITH_REMOTE,
-                                       environment={
-                                           self.REMOTE_ID_ATTR:
-                                               self.REMOTE_IDS[0]
-                                       })
-        self.assertIsNotNone(r.headers.get('X-Subject-Token'))
+        self._issue_unscoped_token(idp=self.IDP_WITH_REMOTE,
+                                   environment={
+                                       self.REMOTE_ID_ATTR:
+                                           self.REMOTE_IDS[0]
+                                   })
 
     def test_issue_unscoped_token_with_saml2_remote(self):
         self.config_fixture.config(group='saml2',
                                    remote_id_attribute=self.REMOTE_ID_ATTR)
-        r = self._issue_unscoped_token(idp=self.IDP_WITH_REMOTE,
-                                       environment={
-                                           self.REMOTE_ID_ATTR:
-                                               self.REMOTE_IDS[0]
-                                       })
-        self.assertIsNotNone(r.headers.get('X-Subject-Token'))
+        self._issue_unscoped_token(idp=self.IDP_WITH_REMOTE,
+                                   environment={
+                                       self.REMOTE_ID_ATTR:
+                                           self.REMOTE_IDS[0]
+                                   })
 
     def test_issue_unscoped_token_with_remote_different(self):
         self.config_fixture.config(group='federation',
@@ -1943,12 +2103,11 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
                                    remote_id_attribute=self.REMOTE_ID_ATTR)
         self.config_fixture.config(group='federation',
                                    remote_id_attribute=uuid.uuid4().hex)
-        r = self._issue_unscoped_token(idp=self.IDP_WITH_REMOTE,
-                                       environment={
-                                           self.REMOTE_ID_ATTR:
-                                               self.REMOTE_IDS[0]
-                                       })
-        self.assertIsNotNone(r.headers.get('X-Subject-Token'))
+        self._issue_unscoped_token(idp=self.IDP_WITH_REMOTE,
+                                   environment={
+                                       self.REMOTE_ID_ATTR:
+                                           self.REMOTE_IDS[0]
+                                   })
 
     def test_issue_unscoped_token_with_remote_unavailable(self):
         self.config_fixture.config(group='federation',
@@ -1962,14 +2121,11 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
 
     def test_issue_unscoped_token_with_remote_user_as_empty_string(self):
         # make sure that REMOTE_USER set as the empty string won't interfere
-        r = self._issue_unscoped_token(environment={'REMOTE_USER': ''})
-        self.assertIsNotNone(r.headers.get('X-Subject-Token'))
+        self._issue_unscoped_token(environment={'REMOTE_USER': ''})
 
     def test_issue_unscoped_token_no_groups(self):
         r = self._issue_unscoped_token(assertion='USER_NO_GROUPS_ASSERTION')
-        self.assertIsNotNone(r.headers.get('X-Subject-Token'))
-        token_resp = r.json_body
-        token_groups = token_resp['token']['user']['OS-FEDERATION']['groups']
+        token_groups = r.federated_groups
         self.assertEqual(0, len(token_groups))
 
     def test_issue_scoped_token_no_groups(self):
@@ -1979,19 +2135,18 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         """
         # issue unscoped token with no groups
         r = self._issue_unscoped_token(assertion='USER_NO_GROUPS_ASSERTION')
-        self.assertIsNotNone(r.headers.get('X-Subject-Token'))
-        token_resp = r.json_body
-        token_groups = token_resp['token']['user']['OS-FEDERATION']['groups']
+        token_groups = r.federated_groups
         self.assertEqual(0, len(token_groups))
-        unscoped_token = r.headers.get('X-Subject-Token')
+        unscoped_token = r.id
 
         # let admin get roles in a project
         self.proj_employees
         admin = unit.new_user_ref(CONF.identity.default_domain_id)
-        self.identity_api.create_user(admin)
-        self.assignment_api.create_grant(self.role_admin['id'],
-                                         user_id=admin['id'],
-                                         project_id=self.proj_employees['id'])
+        PROVIDERS.identity_api.create_user(admin)
+        PROVIDERS.assignment_api.create_grant(
+            self.role_admin['id'], user_id=admin['id'],
+            project_id=self.proj_employees['id']
+        )
 
         # try to scope the token. It should fail
         scope = self._scope_request(
@@ -2009,16 +2164,14 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         non string objects and return token id in the HTTP header.
 
         """
-        api = auth_controllers.Auth()
         environ = {
             'malformed_object': object(),
             'another_bad_idea': tuple(range(10)),
             'yet_another_bad_param': dict(zip(uuid.uuid4().hex, range(32)))
         }
         environ.update(mapping_fixtures.EMPLOYEE_ASSERTION)
-        request = self.make_request(environ=environ)
-        r = api.authenticate_for_token(request, self.UNSCOPED_V3_SAML2_REQ)
-        self.assertIsNotNone(r.headers.get('X-Subject-Token'))
+        with self.make_request(environ=environ):
+            authentication.authenticate_for_token(self.UNSCOPED_V3_SAML2_REQ)
 
     def test_scope_to_project_once_notify(self):
         r = self.v3_create_token(
@@ -2056,32 +2209,57 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
 
         """
         enabled_false = {'enabled': False}
-        self.federation_api.update_idp(self.IDP, enabled_false)
+        PROVIDERS.federation_api.update_idp(self.IDP, enabled_false)
         self.v3_create_token(
             self.TOKEN_SCOPE_PROJECT_EMPLOYEE_FROM_CUSTOMER,
             expected_status=http_client.FORBIDDEN)
 
-    @utils.wip('This will fail because of bug #1291157. The token should be '
-               'invalid after deleting the identity provider.')
-    def test_validate_token_after_deleting_idp_fails(self):
+    def test_validate_token_after_deleting_idp_raises_not_found(self):
         token = self.v3_create_token(
             self.TOKEN_SCOPE_PROJECT_EMPLOYEE_FROM_ADMIN
         )
         token_id = token.headers.get('X-Subject-Token')
         federated_info = token.json_body['token']['user']['OS-FEDERATION']
         idp_id = federated_info['identity_provider']['id']
-        self.federation_api.delete_idp(idp_id)
+        PROVIDERS.federation_api.delete_idp(idp_id)
         headers = {
             'X-Subject-Token': token_id
         }
-        # FIXME(lbragstad): This should raise a 401 Unauthorized exception
-        # since the identity provider is gone.
+        # NOTE(lbragstad): This raises a 404 NOT FOUND because the identity
+        # provider is no longer present. We raise 404 NOT FOUND when we
+        # validate a token and a project or domain no longer exists.
         self.get(
             '/auth/tokens/',
             token=token_id,
             headers=headers,
-            expected_status=http_client.UNAUTHORIZED
+            expected_status=http_client.NOT_FOUND
         )
+
+    def test_deleting_idp_cascade_deleting_fed_user(self):
+        token = self.v3_create_token(
+            self.TOKEN_SCOPE_PROJECT_EMPLOYEE_FROM_ADMIN
+        )
+        federated_info = token.json_body['token']['user']['OS-FEDERATION']
+        idp_id = federated_info['identity_provider']['id']
+
+        # There are three fed users (from 'EMPLOYEE_ASSERTION',
+        # 'CUSTOMER_ASSERTION', 'ADMIN_ASSERTION') with the specified idp.
+        hints = driver_hints.Hints()
+        hints.add_filter('idp_id', idp_id)
+        fed_users = PROVIDERS.shadow_users_api.get_federated_users(hints)
+        self.assertEqual(3, len(fed_users))
+        idp_domain_id = PROVIDERS.federation_api.get_idp(idp_id)['domain_id']
+        for fed_user in fed_users:
+            self.assertEqual(idp_domain_id, fed_user['domain_id'])
+
+        # Delete the idp
+        PROVIDERS.federation_api.delete_idp(idp_id)
+
+        # The related federated user should be deleted as well.
+        hints = driver_hints.Hints()
+        hints.add_filter('idp_id', idp_id)
+        fed_users = PROVIDERS.shadow_users_api.get_federated_users(hints)
+        self.assertEqual([], fed_users)
 
     def test_scope_to_bad_project(self):
         """Scope unscoped token with a project we don't have access to."""
@@ -2118,7 +2296,7 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         user_id = r.json_body['token']['user']['id']
         project_id = r.json_body['token']['project']['id']
         for role in r.json_body['token']['roles']:
-            self.assignment_api.create_grant(
+            PROVIDERS.assignment_api.create_grant(
                 role_id=role['id'], user_id=user_id, project_id=project_id
             )
 
@@ -2150,12 +2328,11 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
             expected_status=http_client.NOT_FOUND)
 
     def test_issue_token_from_rules_without_user(self):
-        api = auth_controllers.Auth()
         environ = copy.deepcopy(mapping_fixtures.BAD_TESTER_ASSERTION)
-        request = self.make_request(environ=environ)
-        self.assertRaises(exception.Unauthorized,
-                          api.authenticate_for_token,
-                          request, self.UNSCOPED_V3_SAML2_REQ)
+        with self.make_request(environ=environ):
+            self.assertRaises(exception.Unauthorized,
+                              authentication.authenticate_for_token,
+                              self.UNSCOPED_V3_SAML2_REQ)
 
     def test_issue_token_with_nonexistent_group(self):
         """Inject assertion that matches rule issuing bad group id.
@@ -2236,11 +2413,12 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         subproject_inherited = unit.new_project_ref(
             domain_id=self.domainD['id'],
             parent_id=self.project_inherited['id'])
-        self.resource_api.create_project(subproject_inherited['id'],
-                                         subproject_inherited)
+        PROVIDERS.resource_api.create_project(
+            subproject_inherited['id'], subproject_inherited
+        )
 
         # Create an inherited role assignment
-        self.assignment_api.create_grant(
+        PROVIDERS.assignment_api.create_grant(
             role_id=self.role_employee['id'],
             group_id=self.group_employees['id'],
             project_id=self.project_inherited['id'],
@@ -2297,11 +2475,11 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
 
         """
         r = self._issue_unscoped_token()
-        token_resp = r.json_body['token']
+        token_resp = render_token.render_token_response_from_model(r)['token']
         # NOTE(lbragstad): Ensure only 'saml2' is in the method list.
-        self.assertListEqual(['saml2'], token_resp['methods'])
+        self.assertListEqual(['saml2'], r.methods)
         self.assertValidMappedUser(token_resp)
-        employee_unscoped_token_id = r.headers.get('X-Subject-Token')
+        employee_unscoped_token_id = r.id
         r = self.get('/auth/projects', token=employee_unscoped_token_id)
         projects = r.result['projects']
         random_project = random.randint(0, len(projects) - 1)
@@ -2331,14 +2509,14 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         """
         # create group and role
         group = unit.new_group_ref(domain_id=self.domainA['id'])
-        group = self.identity_api.create_group(group)
+        group = PROVIDERS.identity_api.create_group(group)
         role = unit.new_role_ref()
-        self.role_api.create_role(role['id'], role)
+        PROVIDERS.role_api.create_role(role['id'], role)
 
         # assign role to group and project_admins
-        self.assignment_api.create_grant(role['id'],
-                                         group_id=group['id'],
-                                         project_id=self.project_all['id'])
+        PROVIDERS.assignment_api.create_grant(
+            role['id'], group_id=group['id'], project_id=self.project_all['id']
+        )
 
         rules = {
             'rules': [
@@ -2370,17 +2548,16 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
             ]
         }
 
-        self.federation_api.update_mapping(self.mapping['id'], rules)
+        PROVIDERS.federation_api.update_mapping(self.mapping['id'], rules)
 
         r = self._issue_unscoped_token(assertion='TESTER_ASSERTION')
-        token_id = r.headers.get('X-Subject-Token')
 
         # delete group
-        self.identity_api.delete_group(group['id'])
+        PROVIDERS.identity_api.delete_group(group['id'])
 
         # scope token to project_all, expect HTTP 500
         scoped_token = self._scope_request(
-            token_id, 'project',
+            r.id, 'project',
             self.project_all['id'])
 
         self.v3_create_token(
@@ -2404,7 +2581,7 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         domain_id = self.domainA['id']
         domain_name = self.domainA['name']
         group = unit.new_group_ref(domain_id=domain_id, name='EXISTS')
-        group = self.identity_api.create_group(group)
+        group = PROVIDERS.identity_api.create_group(group)
         rules = {
             'rules': [
                 {
@@ -2437,7 +2614,11 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
                 }
             ]
         }
-        self.federation_api.update_mapping(self.mapping['id'], rules)
+        PROVIDERS.federation_api.update_mapping(self.mapping['id'], rules)
+        r = self._issue_unscoped_token(assertion='UNMATCHED_GROUP_ASSERTION')
+        assigned_group_ids = r.federated_groups
+        self.assertEqual(1, len(assigned_group_ids))
+        self.assertEqual(group['id'], assigned_group_ids[0]['id'])
 
     def test_empty_blacklist_passess_all_values(self):
         """Test a mapping with empty blacklist specified.
@@ -2464,12 +2645,12 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
 
         # Add a group "EXISTS"
         group_exists = unit.new_group_ref(domain_id=domain_id, name='EXISTS')
-        group_exists = self.identity_api.create_group(group_exists)
+        group_exists = PROVIDERS.identity_api.create_group(group_exists)
 
         # Add a group "NO_EXISTS"
         group_no_exists = unit.new_group_ref(domain_id=domain_id,
                                              name='NO_EXISTS')
-        group_no_exists = self.identity_api.create_group(group_no_exists)
+        group_no_exists = PROVIDERS.identity_api.create_group(group_no_exists)
 
         group_ids = set([group_exists['id'], group_no_exists['id']])
 
@@ -2506,9 +2687,9 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
                 }
             ]
         }
-        self.federation_api.update_mapping(self.mapping['id'], rules)
+        PROVIDERS.federation_api.update_mapping(self.mapping['id'], rules)
         r = self._issue_unscoped_token(assertion='UNMATCHED_GROUP_ASSERTION')
-        assigned_group_ids = r.json['token']['user']['OS-FEDERATION']['groups']
+        assigned_group_ids = r.federated_groups
         self.assertEqual(len(group_ids), len(assigned_group_ids))
         for group in assigned_group_ids:
             self.assertIn(group['id'], group_ids)
@@ -2538,12 +2719,12 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         # Add a group "EXISTS"
         group_exists = unit.new_group_ref(domain_id=domain_id,
                                           name='EXISTS')
-        group_exists = self.identity_api.create_group(group_exists)
+        group_exists = PROVIDERS.identity_api.create_group(group_exists)
 
         # Add a group "NO_EXISTS"
         group_no_exists = unit.new_group_ref(domain_id=domain_id,
                                              name='NO_EXISTS')
-        group_no_exists = self.identity_api.create_group(group_no_exists)
+        group_no_exists = PROVIDERS.identity_api.create_group(group_no_exists)
 
         group_ids = set([group_exists['id'], group_no_exists['id']])
 
@@ -2579,9 +2760,9 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
                 }
             ]
         }
-        self.federation_api.update_mapping(self.mapping['id'], rules)
+        PROVIDERS.federation_api.update_mapping(self.mapping['id'], rules)
         r = self._issue_unscoped_token(assertion='UNMATCHED_GROUP_ASSERTION')
-        assigned_group_ids = r.json['token']['user']['OS-FEDERATION']['groups']
+        assigned_group_ids = r.federated_groups
         self.assertEqual(len(group_ids), len(assigned_group_ids))
         for group in assigned_group_ids:
             self.assertIn(group['id'], group_ids)
@@ -2607,7 +2788,7 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         domain_id = self.domainA['id']
         domain_name = self.domainA['name']
         group = unit.new_group_ref(domain_id=domain_id, name='EXISTS')
-        group = self.identity_api.create_group(group)
+        group = PROVIDERS.identity_api.create_group(group)
         rules = {
             'rules': [
                 {
@@ -2641,9 +2822,9 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
                 }
             ]
         }
-        self.federation_api.update_mapping(self.mapping['id'], rules)
+        PROVIDERS.federation_api.update_mapping(self.mapping['id'], rules)
         r = self._issue_unscoped_token(assertion='UNMATCHED_GROUP_ASSERTION')
-        assigned_groups = r.json['token']['user']['OS-FEDERATION']['groups']
+        assigned_groups = r.federated_groups
         self.assertEqual(len(assigned_groups), 0)
 
     def test_not_setting_whitelist_accepts_all_values(self):
@@ -2670,12 +2851,12 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         # Add a group "EXISTS"
         group_exists = unit.new_group_ref(domain_id=domain_id,
                                           name='EXISTS')
-        group_exists = self.identity_api.create_group(group_exists)
+        group_exists = PROVIDERS.identity_api.create_group(group_exists)
 
         # Add a group "NO_EXISTS"
         group_no_exists = unit.new_group_ref(domain_id=domain_id,
                                              name='NO_EXISTS')
-        group_no_exists = self.identity_api.create_group(group_no_exists)
+        group_no_exists = PROVIDERS.identity_api.create_group(group_no_exists)
 
         group_ids = set([group_exists['id'], group_no_exists['id']])
 
@@ -2711,9 +2892,9 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
                 }
             ]
         }
-        self.federation_api.update_mapping(self.mapping['id'], rules)
+        PROVIDERS.federation_api.update_mapping(self.mapping['id'], rules)
         r = self._issue_unscoped_token(assertion='UNMATCHED_GROUP_ASSERTION')
-        assigned_group_ids = r.json['token']['user']['OS-FEDERATION']['groups']
+        assigned_group_ids = r.federated_groups
         self.assertEqual(len(group_ids), len(assigned_group_ids))
         for group in assigned_group_ids:
             self.assertIn(group['id'], group_ids)
@@ -2728,8 +2909,7 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         """
         self.config_fixture.config(group='federation',
                                    assertion_prefix=self.ASSERTION_PREFIX)
-        r = self._issue_unscoped_token(assertion='EMPLOYEE_ASSERTION_PREFIXED')
-        self.assertIsNotNone(r.headers.get('X-Subject-Token'))
+        self._issue_unscoped_token(assertion='EMPLOYEE_ASSERTION_PREFIXED')
 
     def test_assertion_prefix_parameter_expect_fail(self):
         """Test parameters filtering based on the prefix.
@@ -2741,8 +2921,7 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         Expect server to raise exception.Unathorized exception.
 
         """
-        r = self._issue_unscoped_token()
-        self.assertIsNotNone(r.headers.get('X-Subject-Token'))
+        self._issue_unscoped_token()
         self.config_fixture.config(group='federation',
                                    assertion_prefix='UserName')
 
@@ -2751,23 +2930,24 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
 
     def test_unscoped_token_has_user_domain(self):
         r = self._issue_unscoped_token()
-        self._check_domains_are_valid(r.json_body['token'])
+        self._check_domains_are_valid(
+            render_token.render_token_response_from_model(r)['token'])
 
     def test_scoped_token_has_user_domain(self):
         r = self.v3_create_token(
             self.TOKEN_SCOPE_PROJECT_EMPLOYEE_FROM_EMPLOYEE)
-        self._check_domains_are_valid(r.result['token'])
+        self._check_domains_are_valid(r.json_body['token'])
 
     def test_issue_unscoped_token_for_local_user(self):
         r = self._issue_unscoped_token(assertion='LOCAL_USER_ASSERTION')
-        token_resp = r.json_body['token']
-        self.assertListEqual(['saml2'], token_resp['methods'])
-        self.assertEqual(self.user['id'], token_resp['user']['id'])
-        self.assertEqual(self.user['name'], token_resp['user']['name'])
-        self.assertEqual(self.domain['id'], token_resp['user']['domain']['id'])
+        self.assertListEqual(['saml2'], r.methods)
+        self.assertEqual(self.user['id'], r.user_id)
+        self.assertEqual(self.user['name'], r.user['name'])
+        self.assertEqual(self.domain['id'], r.user_domain['id'])
         # Make sure the token is not scoped
-        self.assertNotIn('project', token_resp)
-        self.assertNotIn('domain', token_resp)
+        self.assertIsNone(r.domain_id)
+        self.assertIsNone(r.project_id)
+        self.assertTrue(r.unscoped)
 
     def test_issue_token_for_local_user_user_not_found(self):
         self.assertRaises(exception.Unauthorized,
@@ -2776,11 +2956,10 @@ class FederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
 
     def test_user_name_and_id_in_federation_token(self):
         r = self._issue_unscoped_token(assertion='EMPLOYEE_ASSERTION')
-        token = r.json_body['token']
         self.assertEqual(
             mapping_fixtures.EMPLOYEE_ASSERTION['UserName'],
-            token['user']['name'])
-        self.assertNotEqual(token['user']['name'], token['user']['id'])
+            r.user['name'])
+        self.assertNotEqual(r.user['name'], r.user_id)
         r = self.v3_create_token(
             self.TOKEN_SCOPE_PROJECT_EMPLOYEE_FROM_EMPLOYEE)
         token = r.json_body['token']
@@ -2815,18 +2994,18 @@ class FernetFederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
 
     def test_federated_unscoped_token(self):
         resp = self._issue_unscoped_token()
-        self.assertEqual(204, len(resp.headers['X-Subject-Token']))
-        self.assertValidMappedUser(resp.json_body['token'])
+        self.assertValidMappedUser(
+            render_token.render_token_response_from_model(resp)['token'])
 
     def test_federated_unscoped_token_with_multiple_groups(self):
         assertion = 'ANOTHER_CUSTOMER_ASSERTION'
         resp = self._issue_unscoped_token(assertion=assertion)
-        self.assertEqual(226, len(resp.headers['X-Subject-Token']))
-        self.assertValidMappedUser(resp.json_body['token'])
+        self.assertValidMappedUser(
+            render_token.render_token_response_from_model(resp)['token'])
 
     def test_validate_federated_unscoped_token(self):
         resp = self._issue_unscoped_token()
-        unscoped_token = resp.headers.get('X-Subject-Token')
+        unscoped_token = resp.id
         # assert that the token we received is valid
         self.get('/auth/tokens/', headers={'X-Subject-Token': unscoped_token})
 
@@ -2839,8 +3018,71 @@ class FernetFederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
 
         """
         resp = self._issue_unscoped_token()
-        self.assertValidMappedUser(resp.json_body['token'])
-        unscoped_token = resp.headers.get('X-Subject-Token')
+        self.assertValidMappedUser(
+            render_token.render_token_response_from_model(resp)['token'])
+        unscoped_token = resp.id
+        resp = self.get('/auth/projects', token=unscoped_token)
+        projects = resp.result['projects']
+        random_project = random.randint(0, len(projects) - 1)
+        project = projects[random_project]
+
+        v3_scope_request = self._scope_request(unscoped_token,
+                                               'project', project['id'])
+
+        resp = self.v3_create_token(v3_scope_request)
+        token_resp = resp.result['token']
+        self._check_project_scoped_token_attributes(token_resp, project['id'])
+
+
+class JWSFederatedTokenTests(test_v3.RestfulTestCase, FederatedSetupMixin):
+    AUTH_METHOD = 'token'
+
+    def load_fixtures(self, fixtures):
+        super(JWSFederatedTokenTests, self).load_fixtures(fixtures)
+        self.load_federation_sample_data()
+
+    def config_overrides(self):
+        super(JWSFederatedTokenTests, self).config_overrides()
+        self.config_fixture.config(group='token', provider='jws')
+        self.useFixture(ksfixtures.JWSKeyRepository(self.config_fixture))
+
+    def auth_plugin_config_override(self):
+        methods = ['saml2', 'token', 'password']
+        super(JWSFederatedTokenTests,
+              self).auth_plugin_config_override(methods)
+
+    def test_federated_unscoped_token(self):
+        token_model = self._issue_unscoped_token()
+        self.assertValidMappedUser(
+            render_token.render_token_response_from_model(token_model)['token']
+        )
+
+    def test_federated_unscoped_token_with_multiple_groups(self):
+        assertion = 'ANOTHER_CUSTOMER_ASSERTION'
+        token_model = self._issue_unscoped_token(assertion=assertion)
+        self.assertValidMappedUser(
+            render_token.render_token_response_from_model(token_model)['token']
+        )
+
+    def test_validate_federated_unscoped_token(self):
+        token_model = self._issue_unscoped_token()
+        unscoped_token = token_model.id
+        # assert that the token we received is valid
+        self.get('/auth/tokens/', headers={'X-Subject-Token': unscoped_token})
+
+    def test_jws_full_workflow(self):
+        """Test 'standard' workflow for granting JWS tokens.
+
+        * Issue unscoped token
+        * List available projects based on groups
+        * Scope token to one of available projects
+
+        """
+        token_model = self._issue_unscoped_token()
+        self.assertValidMappedUser(
+            render_token.render_token_response_from_model(token_model)['token']
+        )
+        unscoped_token = token_model.id
         resp = self.get('/auth/projects', token=unscoped_token)
         projects = resp.result['projects']
         random_project = random.randint(0, len(projects) - 1)
@@ -2869,9 +3111,6 @@ class FederatedTokenTestsMethodToken(FederatedTokenTests):
         super(FederatedTokenTests,
               self).auth_plugin_config_override(methods)
 
-    @utils.wip('This will fail because of bug #1501032. The returned method'
-               'list should contain "saml2". This is documented in bug '
-               '1501032.')
     def test_full_workflow(self):
         """Test 'standard' workflow for granting access tokens.
 
@@ -2881,11 +3120,11 @@ class FederatedTokenTestsMethodToken(FederatedTokenTests):
 
         """
         r = self._issue_unscoped_token()
-        token_resp = r.json_body['token']
+        token_resp = render_token.render_token_response_from_model(r)['token']
         # NOTE(lbragstad): Ensure only 'saml2' is in the method list.
-        self.assertListEqual(['saml2'], token_resp['methods'])
+        self.assertListEqual(['saml2'], r.methods)
         self.assertValidMappedUser(token_resp)
-        employee_unscoped_token_id = r.headers.get('X-Subject-Token')
+        employee_unscoped_token_id = r.id
         r = self.get('/auth/projects', token=employee_unscoped_token_id)
         projects = r.result['projects']
         random_project = random.randint(0, len(projects) - 1)
@@ -2894,7 +3133,7 @@ class FederatedTokenTestsMethodToken(FederatedTokenTests):
         v3_scope_request = self._scope_request(employee_unscoped_token_id,
                                                'project', project['id'])
 
-        r = self.v3_authenticate_token(v3_scope_request)
+        r = self.v3_create_token(v3_scope_request)
         token_resp = r.result['token']
         self.assertIn('token', token_resp['methods'])
         self.assertIn('saml2', token_resp['methods'])
@@ -2919,21 +3158,21 @@ class FederatedUserTests(test_v3.RestfulTestCase, FederatedSetupMixin):
     def test_user_id_persistense(self):
         """Ensure user_id is persistend for multiple federated authn calls."""
         r = self._issue_unscoped_token()
-        user_id = r.json_body['token']['user']['id']
-        self.assertNotEmpty(self.identity_api.get_user(user_id))
+        user_id = r.user_id
+        self.assertNotEmpty(PROVIDERS.identity_api.get_user(user_id))
 
         r = self._issue_unscoped_token()
-        user_id2 = r.json_body['token']['user']['id']
-        self.assertNotEmpty(self.identity_api.get_user(user_id2))
+        user_id2 = r.user_id
+        self.assertNotEmpty(PROVIDERS.identity_api.get_user(user_id2))
         self.assertEqual(user_id, user_id2)
 
     def test_user_role_assignment(self):
         # create project and role
         project_ref = unit.new_project_ref(
             domain_id=CONF.identity.default_domain_id)
-        self.resource_api.create_project(project_ref['id'], project_ref)
+        PROVIDERS.resource_api.create_project(project_ref['id'], project_ref)
         role_ref = unit.new_role_ref()
-        self.role_api.create_role(role_ref['id'], role_ref)
+        PROVIDERS.role_api.create_role(role_ref['id'], role_ref)
 
         # authenticate via saml get back a user id
         user_id, unscoped_token = self._authenticate_via_saml()
@@ -2946,7 +3185,7 @@ class FederatedUserTests(test_v3.RestfulTestCase, FederatedSetupMixin):
                                  expected_status=http_client.UNAUTHORIZED)
 
         # assign project role to federated user
-        self.assignment_api.add_role_to_user_and_project(
+        PROVIDERS.assignment_api.add_role_to_user_and_project(
             user_id, project_ref['id'], role_ref['id'])
 
         # exchange an unscoped token for a scoped token
@@ -2964,7 +3203,7 @@ class FederatedUserTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         # create a 2nd project
         project_ref2 = unit.new_project_ref(
             domain_id=CONF.identity.default_domain_id)
-        self.resource_api.create_project(project_ref2['id'], project_ref2)
+        PROVIDERS.resource_api.create_project(project_ref2['id'], project_ref2)
 
         # ensure the user cannot access the 2nd resource (forbidden)
         path = '/projects/%(project_id)s' % {'project_id': project_ref2['id']}
@@ -2975,9 +3214,9 @@ class FederatedUserTests(test_v3.RestfulTestCase, FederatedSetupMixin):
     def test_domain_scoped_user_role_assignment(self):
         # create domain and role
         domain_ref = unit.new_domain_ref()
-        self.resource_api.create_domain(domain_ref['id'], domain_ref)
+        PROVIDERS.resource_api.create_domain(domain_ref['id'], domain_ref)
         role_ref = unit.new_role_ref()
-        self.role_api.create_role(role_ref['id'], role_ref)
+        PROVIDERS.role_api.create_role(role_ref['id'], role_ref)
 
         # authenticate via saml get back a user id
         user_id, unscoped_token = self._authenticate_via_saml()
@@ -2990,9 +3229,9 @@ class FederatedUserTests(test_v3.RestfulTestCase, FederatedSetupMixin):
                                  expected_status=http_client.UNAUTHORIZED)
 
         # assign domain role to user
-        self.assignment_api.create_grant(role_ref['id'],
-                                         user_id=user_id,
-                                         domain_id=domain_ref['id'])
+        PROVIDERS.assignment_api.create_grant(
+            role_ref['id'], user_id=user_id, domain_id=domain_ref['id']
+        )
 
         # exchange an unscoped token for domain scoped token and test
         r = self.v3_create_token(v3_scope_request,
@@ -3005,15 +3244,15 @@ class FederatedUserTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         # create project and role
         project_ref = unit.new_project_ref(
             domain_id=CONF.identity.default_domain_id)
-        self.resource_api.create_project(project_ref['id'], project_ref)
+        PROVIDERS.resource_api.create_project(project_ref['id'], project_ref)
         role_ref = unit.new_role_ref()
-        self.role_api.create_role(role_ref['id'], role_ref)
+        PROVIDERS.role_api.create_role(role_ref['id'], role_ref)
 
         # authenticate via saml get back a user id
         user_id, unscoped_token = self._authenticate_via_saml()
 
         # assign project role to federated user
-        self.assignment_api.add_role_to_user_and_project(
+        PROVIDERS.assignment_api.add_role_to_user_and_project(
             user_id, project_ref['id'], role_ref['id'])
 
         # get auth projects
@@ -3031,24 +3270,25 @@ class FederatedUserTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         # create project, role, group
         domain_id = CONF.identity.default_domain_id
         project_ref = unit.new_project_ref(domain_id=domain_id)
-        self.resource_api.create_project(project_ref['id'], project_ref)
+        PROVIDERS.resource_api.create_project(project_ref['id'], project_ref)
         role_ref = unit.new_role_ref()
-        self.role_api.create_role(role_ref['id'], role_ref)
+        PROVIDERS.role_api.create_role(role_ref['id'], role_ref)
         group_ref = unit.new_group_ref(domain_id=domain_id)
-        group_ref = self.identity_api.create_group(group_ref)
+        group_ref = PROVIDERS.identity_api.create_group(group_ref)
 
         # authenticate via saml get back a user id
         user_id, unscoped_token = self._authenticate_via_saml()
 
         # assign role to group at project
-        self.assignment_api.create_grant(role_ref['id'],
-                                         group_id=group_ref['id'],
-                                         project_id=project_ref['id'],
-                                         domain_id=domain_id)
+        PROVIDERS.assignment_api.create_grant(
+            role_ref['id'], group_id=group_ref['id'],
+            project_id=project_ref['id'], domain_id=domain_id
+        )
 
         # add user to group
-        self.identity_api.add_user_to_group(user_id=user_id,
-                                            group_id=group_ref['id'])
+        PROVIDERS.identity_api.add_user_to_group(
+            user_id=user_id, group_id=group_ref['id']
+        )
 
         # get auth projects
         r = self.get('/auth/projects', token=unscoped_token)
@@ -3064,17 +3304,17 @@ class FederatedUserTests(test_v3.RestfulTestCase, FederatedSetupMixin):
     def test_auth_domains_matches_federation_domains(self):
         # create domain and role
         domain_ref = unit.new_domain_ref()
-        self.resource_api.create_domain(domain_ref['id'], domain_ref)
+        PROVIDERS.resource_api.create_domain(domain_ref['id'], domain_ref)
         role_ref = unit.new_role_ref()
-        self.role_api.create_role(role_ref['id'], role_ref)
+        PROVIDERS.role_api.create_role(role_ref['id'], role_ref)
 
         # authenticate via saml get back a user id and token
         user_id, unscoped_token = self._authenticate_via_saml()
 
         # assign domain role to user
-        self.assignment_api.create_grant(role_ref['id'],
-                                         user_id=user_id,
-                                         domain_id=domain_ref['id'])
+        PROVIDERS.assignment_api.create_grant(
+            role_ref['id'], user_id=user_id, domain_id=domain_ref['id']
+        )
 
         # get auth domains
         r = self.get('/auth/domains', token=unscoped_token)
@@ -3090,23 +3330,25 @@ class FederatedUserTests(test_v3.RestfulTestCase, FederatedSetupMixin):
     def test_auth_domains_matches_federation_domains_with_group_assign(self):
         # create role, group, and domain
         domain_ref = unit.new_domain_ref()
-        self.resource_api.create_domain(domain_ref['id'], domain_ref)
+        PROVIDERS.resource_api.create_domain(domain_ref['id'], domain_ref)
         role_ref = unit.new_role_ref()
-        self.role_api.create_role(role_ref['id'], role_ref)
+        PROVIDERS.role_api.create_role(role_ref['id'], role_ref)
         group_ref = unit.new_group_ref(domain_id=domain_ref['id'])
-        group_ref = self.identity_api.create_group(group_ref)
+        group_ref = PROVIDERS.identity_api.create_group(group_ref)
 
         # authenticate via saml get back a user id and token
         user_id, unscoped_token = self._authenticate_via_saml()
 
         # assign domain role to group
-        self.assignment_api.create_grant(role_ref['id'],
-                                         group_id=group_ref['id'],
-                                         domain_id=domain_ref['id'])
+        PROVIDERS.assignment_api.create_grant(
+            role_ref['id'], group_id=group_ref['id'],
+            domain_id=domain_ref['id']
+        )
 
         # add user to group
-        self.identity_api.add_user_to_group(user_id=user_id,
-                                            group_id=group_ref['id'])
+        PROVIDERS.identity_api.add_user_to_group(
+            user_id=user_id, group_id=group_ref['id']
+        )
 
         # get auth domains
         r = self.get('/auth/domains', token=unscoped_token)
@@ -3122,7 +3364,7 @@ class FederatedUserTests(test_v3.RestfulTestCase, FederatedSetupMixin):
     def test_list_head_domains_for_user_duplicates(self):
         # create role
         role_ref = unit.new_role_ref()
-        self.role_api.create_role(role_ref['id'], role_ref)
+        PROVIDERS.role_api.create_role(role_ref['id'], role_ref)
 
         # authenticate via saml get back a user id and token
         user_id, unscoped_token = self._authenticate_via_saml()
@@ -3140,9 +3382,9 @@ class FederatedUserTests(test_v3.RestfulTestCase, FederatedSetupMixin):
 
         # assign group domain and role to user, this should create a
         # duplicate domain
-        self.assignment_api.create_grant(role_ref['id'],
-                                         user_id=user_id,
-                                         domain_id=domain_from_group['id'])
+        PROVIDERS.assignment_api.create_grant(
+            role_ref['id'], user_id=user_id, domain_id=domain_from_group['id']
+        )
 
         # get user domains via /OS-FEDERATION/domains and test for duplicates
         r = self.get('/OS-FEDERATION/domains', token=unscoped_token)
@@ -3163,7 +3405,7 @@ class FederatedUserTests(test_v3.RestfulTestCase, FederatedSetupMixin):
     def test_list_head_projects_for_user_duplicates(self):
         # create role
         role_ref = unit.new_role_ref()
-        self.role_api.create_role(role_ref['id'], role_ref)
+        PROVIDERS.role_api.create_role(role_ref['id'], role_ref)
 
         # authenticate via saml get back a user id and token
         user_id, unscoped_token = self._authenticate_via_saml()
@@ -3181,7 +3423,7 @@ class FederatedUserTests(test_v3.RestfulTestCase, FederatedSetupMixin):
 
         # assign group project and role to user, this should create a
         # duplicate project
-        self.assignment_api.add_role_to_user_and_project(
+        PROVIDERS.assignment_api.add_role_to_user_and_project(
             user_id, project_from_group['id'], role_ref['id'])
 
         # get user projects via /OS-FEDERATION/projects and test for duplicates
@@ -3203,24 +3445,24 @@ class FederatedUserTests(test_v3.RestfulTestCase, FederatedSetupMixin):
     def test_delete_protocol_after_federated_authentication(self):
         # Create a protocol
         protocol = self.proto_ref(mapping_id=self.mapping['id'])
-        self.federation_api.create_protocol(
+        PROVIDERS.federation_api.create_protocol(
             self.IDP, protocol['id'], protocol)
 
         # Authenticate to create a new federated_user entry with a foreign
         # key pointing to the protocol
         r = self._issue_unscoped_token()
-        user_id = r.json_body['token']['user']['id']
-        self.assertNotEmpty(self.identity_api.get_user(user_id))
+        user_id = r.user_id
+        self.assertNotEmpty(PROVIDERS.identity_api.get_user(user_id))
 
         # Now we should be able to delete the protocol
-        self.federation_api.delete_protocol(self.IDP, protocol['id'])
+        PROVIDERS.federation_api.delete_protocol(self.IDP, protocol['id'])
 
     def _authenticate_via_saml(self):
         r = self._issue_unscoped_token()
-        unscoped_token = r.headers['X-Subject-Token']
-        token_resp = r.json_body['token']
+        unscoped_token = r.id
+        token_resp = render_token.render_token_response_from_model(r)['token']
         self.assertValidMappedUser(token_resp)
-        return token_resp['user']['id'], unscoped_token
+        return r.user_id, unscoped_token
 
 
 class ShadowMappingTests(test_v3.RestfulTestCase, FederatedSetupMixin):
@@ -3240,7 +3482,7 @@ class ShadowMappingTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         super(ShadowMappingTests, self).setUp()
         # update the mapping we have already setup to have specific projects
         # and roles.
-        self.federation_api.update_mapping(
+        PROVIDERS.federation_api.update_mapping(
             self.mapping['id'],
             mapping_fixtures.MAPPING_PROJECTS
         )
@@ -3257,12 +3499,12 @@ class ShadowMappingTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         # below that test that behavior and the setup is done in the test.
         member_role_ref = unit.new_role_ref(name='member')
         assert member_role_ref['domain_id'] is None
-        self.member_role = self.role_api.create_role(
+        self.member_role = PROVIDERS.role_api.create_role(
             member_role_ref['id'], member_role_ref
         )
         observer_role_ref = unit.new_role_ref(name='observer')
         assert observer_role_ref['domain_id'] is None
-        self.observer_role = self.role_api.create_role(
+        self.observer_role = PROVIDERS.role_api.create_role(
             observer_role_ref['id'], observer_role_ref
         )
 
@@ -3283,17 +3525,18 @@ class ShadowMappingTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         self.load_federation_sample_data()
 
     def test_shadow_mapping_creates_projects(self):
-        projects = self.resource_api.list_projects()
+        projects = PROVIDERS.resource_api.list_projects()
         for project in projects:
             self.assertNotIn(project['name'], self.expected_results)
 
         response = self._issue_unscoped_token()
-        self.assertValidMappedUser(response.json_body['token'])
-        unscoped_token = response.headers.get('X-Subject-Token')
+        self.assertValidMappedUser(
+            render_token.render_token_response_from_model(response)['token'])
+        unscoped_token = response.id
         response = self.get('/auth/projects', token=unscoped_token)
         projects = response.json_body['projects']
         for project in projects:
-            project = self.resource_api.get_project_by_name(
+            project = PROVIDERS.resource_api.get_project_by_name(
                 project['name'],
                 self.idp['domain_id']
             )
@@ -3301,8 +3544,9 @@ class ShadowMappingTests(test_v3.RestfulTestCase, FederatedSetupMixin):
 
     def test_shadow_mapping_create_projects_role_assignments(self):
         response = self._issue_unscoped_token()
-        self.assertValidMappedUser(response.json_body['token'])
-        unscoped_token = response.headers.get('X-Subject-Token')
+        self.assertValidMappedUser(
+            render_token.render_token_response_from_model(response)['token'])
+        unscoped_token = response.id
         response = self.get('/auth/projects', token=unscoped_token)
         projects = response.json_body['projects']
         for project in projects:
@@ -3323,13 +3567,14 @@ class ShadowMappingTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         # If a role required by the mapping does not exist, then we should fail
         # the mapping since shadow mapping currently does not support creating
         # mappings on-the-fly.
-        self.role_api.delete_role(self.observer_role['id'])
+        PROVIDERS.role_api.delete_role(self.observer_role['id'])
         self.assertRaises(exception.RoleNotFound, self._issue_unscoped_token)
 
     def test_shadow_mapping_creates_project_in_identity_provider_domain(self):
         response = self._issue_unscoped_token()
-        self.assertValidMappedUser(response.json_body['token'])
-        unscoped_token = response.headers.get('X-Subject-Token')
+        self.assertValidMappedUser(
+            render_token.render_token_response_from_model(response)['token'])
+        unscoped_token = response.id
         response = self.get('/auth/projects', token=unscoped_token)
         projects = response.json_body['projects']
         for project in projects:
@@ -3338,12 +3583,13 @@ class ShadowMappingTests(test_v3.RestfulTestCase, FederatedSetupMixin):
     def test_shadow_mapping_is_idempotent(self):
         """Test that projects remain idempotent for every federated auth."""
         response = self._issue_unscoped_token()
-        self.assertValidMappedUser(response.json_body['token'])
-        unscoped_token = response.headers.get('X-Subject-Token')
+        self.assertValidMappedUser(
+            render_token.render_token_response_from_model(response)['token'])
+        unscoped_token = response.id
         response = self.get('/auth/projects', token=unscoped_token)
         project_ids = [p['id'] for p in response.json_body['projects']]
         response = self._issue_unscoped_token()
-        unscoped_token = response.headers.get('X-Subject-Token')
+        unscoped_token = response.id
         response = self.get('/auth/projects', token=unscoped_token)
         projects = response.json_body['projects']
         for project in projects:
@@ -3352,15 +3598,15 @@ class ShadowMappingTests(test_v3.RestfulTestCase, FederatedSetupMixin):
     def test_roles_outside_idp_domain_fail_mapping(self):
         # Create a new domain
         d = unit.new_domain_ref()
-        new_domain = self.resource_api.create_domain(d['id'], d)
+        new_domain = PROVIDERS.resource_api.create_domain(d['id'], d)
 
         # Delete the member role and recreate it in a different domain
-        self.role_api.delete_role(self.member_role['id'])
+        PROVIDERS.role_api.delete_role(self.member_role['id'])
         member_role_ref = unit.new_role_ref(
             name='member',
             domain_id=new_domain['id']
         )
-        self.role_api.create_role(member_role_ref['id'], member_role_ref)
+        PROVIDERS.role_api.create_role(member_role_ref['id'], member_role_ref)
         self.assertRaises(
             exception.DomainSpecificRoleNotWithinIdPDomain,
             self._issue_unscoped_token
@@ -3368,18 +3614,18 @@ class ShadowMappingTests(test_v3.RestfulTestCase, FederatedSetupMixin):
 
     def test_roles_in_idp_domain_can_be_assigned_from_mapping(self):
         # Delete the member role and recreate it in the domain of the idp
-        self.role_api.delete_role(self.member_role['id'])
+        PROVIDERS.role_api.delete_role(self.member_role['id'])
         member_role_ref = unit.new_role_ref(
             name='member',
             domain_id=self.idp['domain_id']
         )
-        self.role_api.create_role(member_role_ref['id'], member_role_ref)
+        PROVIDERS.role_api.create_role(member_role_ref['id'], member_role_ref)
         response = self._issue_unscoped_token()
-        user_id = response.json_body['token']['user']['id']
-        unscoped_token = response.headers.get('X-Subject-Token')
+        user_id = response.user_id
+        unscoped_token = response.id
         response = self.get('/auth/projects', token=unscoped_token)
         projects = response.json_body['projects']
-        staging_project = self.resource_api.get_project_by_name(
+        staging_project = PROVIDERS.resource_api.get_project_by_name(
             'Staging', self.idp['domain_id']
         )
         for project in projects:
@@ -3387,10 +3633,12 @@ class ShadowMappingTests(test_v3.RestfulTestCase, FederatedSetupMixin):
             # a member role for our user, the /auth/projects response doesn't
             # include projects with only domain-specific role assignments.
             self.assertNotEqual(project['name'], 'Staging')
-        domain_role_assignments = self.assignment_api.list_role_assignments(
-            user_id=user_id,
-            project_id=staging_project['id'],
-            strip_domain_roles=False
+        domain_role_assignments = (
+            PROVIDERS.assignment_api.list_role_assignments(
+                user_id=user_id,
+                project_id=staging_project['id'],
+                strip_domain_roles=False
+            )
         )
         self.assertEqual(
             staging_project['id'], domain_role_assignments[0]['project_id']
@@ -3405,16 +3653,16 @@ class ShadowMappingTests(test_v3.RestfulTestCase, FederatedSetupMixin):
             domain_id=self.idp['domain_id'],
             name='Observers'
         )
-        observer_group = self.identity_api.create_group(observer_group)
+        observer_group = PROVIDERS.identity_api.create_group(observer_group)
         # make sure the Observers group has a role on the finance project
         finance_project = unit.new_project_ref(
             domain_id=self.idp['domain_id'],
             name='Finance'
         )
-        finance_project = self.resource_api.create_project(
+        finance_project = PROVIDERS.resource_api.create_project(
             finance_project['id'], finance_project
         )
-        self.assignment_api.create_grant(
+        PROVIDERS.assignment_api.create_grant(
             self.observer_role['id'],
             group_id=observer_group['id'],
             project_id=finance_project['id']
@@ -3430,10 +3678,12 @@ class ShadowMappingTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         }
         updated_mapping = copy.deepcopy(mapping_fixtures.MAPPING_PROJECTS)
         updated_mapping['rules'][0]['local'].append(group_rule)
-        self.federation_api.update_mapping(self.mapping['id'], updated_mapping)
+        PROVIDERS.federation_api.update_mapping(
+            self.mapping['id'], updated_mapping
+        )
         response = self._issue_unscoped_token()
         # user_id = response.json_body['token']['user']['id']
-        unscoped_token = response.headers.get('X-Subject-Token')
+        unscoped_token = response.id
         response = self.get('/auth/projects', token=unscoped_token)
         projects = response.json_body['projects']
         self.expected_results = {
@@ -3465,23 +3715,25 @@ class ShadowMappingTests(test_v3.RestfulTestCase, FederatedSetupMixin):
         # to them. This test verifies that this is no longer true.
         # Authenticate once to create the projects
         response = self._issue_unscoped_token()
-        self.assertValidMappedUser(response.json_body['token'])
-        unscoped_token = response.headers.get('X-Subject-Token')
+        self.assertValidMappedUser(
+            render_token.render_token_response_from_model(response)['token'])
 
         # Assign admin role to newly-created project to another user
-        staging_project = self.resource_api.get_project_by_name(
+        staging_project = PROVIDERS.resource_api.get_project_by_name(
             'Staging', self.idp['domain_id']
         )
         admin = unit.new_user_ref(CONF.identity.default_domain_id)
-        self.identity_api.create_user(admin)
-        self.assignment_api.create_grant(self.role_admin['id'],
-                                         user_id=admin['id'],
-                                         project_id=staging_project['id'])
+        PROVIDERS.identity_api.create_user(admin)
+        PROVIDERS.assignment_api.create_grant(
+            self.role_admin['id'], user_id=admin['id'],
+            project_id=staging_project['id']
+        )
 
         # Authenticate again with the federated user and verify roles
         response = self._issue_unscoped_token()
-        self.assertValidMappedUser(response.json_body['token'])
-        unscoped_token = response.headers.get('X-Subject-Token')
+        self.assertValidMappedUser(
+            render_token.render_token_response_from_model(response)['token'])
+        unscoped_token = response.id
         scope = self._scope_request(
             unscoped_token, 'project', staging_project['id']
         )
@@ -3540,22 +3792,13 @@ class SAMLGenerationTests(test_v3.RestfulTestCase):
     ASSERTION_VERSION = "2.0"
     SERVICE_PROVDIER_ID = 'ACME'
 
-    def sp_ref(self):
-        ref = {
-            'auth_url': self.SP_AUTH_URL,
-            'enabled': True,
-            'description': uuid.uuid4().hex,
-            'sp_url': self.RECIPIENT,
-            'relay_state_prefix': CONF.saml.relay_state_prefix,
-
-        }
-        return ref
-
     def setUp(self):
         super(SAMLGenerationTests, self).setUp()
         self.signed_assertion = saml2.create_class_from_xml_string(
             saml.Assertion, _load_xml(self.ASSERTION_FILE))
-        self.sp = self.sp_ref()
+        self.sp = core.new_service_provider_ref(
+            auth_url=self.SP_AUTH_URL, sp_url=self.RECIPIENT
+        )
         url = '/OS-FEDERATION/service_providers/' + self.SERVICE_PROVDIER_ID
         self.put(url, body={'service_provider': self.sp},
                  expected_status=http_client.CREATED)
@@ -3699,12 +3942,13 @@ class SAMLGenerationTests(test_v3.RestfulTestCase):
     def test_assertion_using_explicit_namespace_prefixes(self):
         def mocked_subprocess_check_output(*popenargs, **kwargs):
             # the last option is the assertion file to be signed
-            filename = popenargs[0][-1]
-            with open(filename, 'r') as f:
-                assertion_content = f.read()
-            # since we are not testing the signature itself, we can return
-            # the assertion as is without signing it
-            return assertion_content
+            if popenargs[0] != ['/usr/bin/which', CONF.saml.xmlsec1_binary]:
+                filename = popenargs[0][-1]
+                with open(filename, 'r') as f:
+                    assertion_content = f.read()
+                # since we are not testing the signature itself, we can return
+                # the assertion as is without signing it
+                return assertion_content
 
         with mock.patch.object(subprocess, 'check_output',
                                side_effect=mocked_subprocess_check_output):
@@ -3901,7 +4145,7 @@ class SAMLGenerationTests(test_v3.RestfulTestCase):
         """Try generating assertion for disabled Service Provider."""
         # Disable Service Provider
         sp_ref = {'enabled': False}
-        self.federation_api.update_sp(self.SERVICE_PROVDIER_ID, sp_ref)
+        PROVIDERS.federation_api.update_sp(self.SERVICE_PROVDIER_ID, sp_ref)
 
         token_id = self._fetch_valid_token()
         body = self._create_generate_saml_request(token_id,
@@ -3985,33 +4229,46 @@ class SAMLGenerationTests(test_v3.RestfulTestCase):
         create_class_mock.assert_called_with(saml.Assertion, 'fakeoutput')
 
     @mock.patch('oslo_utils.fileutils.write_to_tempfile')
-    @mock.patch.object(subprocess, 'check_output')
-    def test_sign_assertion_exc(self, check_output_mock,
-                                write_to_tempfile_mock):
+    def test_sign_assertion_exc(self, write_to_tempfile_mock):
         # If the command fails the command output is logged.
-
-        write_to_tempfile_mock.return_value = 'tmp_path'
-
         sample_returncode = 1
         sample_output = self.getUniqueString()
-        check_output_mock.side_effect = subprocess.CalledProcessError(
-            returncode=sample_returncode, cmd=CONF.saml.xmlsec1_binary,
-            output=sample_output)
+        write_to_tempfile_mock.return_value = 'tmp_path'
 
-        logger_fixture = self.useFixture(fixtures.LoggerFixture())
-        self.assertRaises(exception.SAMLSigningError,
-                          keystone_idp._sign_assertion,
-                          self.signed_assertion)
-        expected_log = (
-            "Error when signing assertion, reason: Command '%s' returned "
-            "non-zero exit status %s %s\n" %
-            (CONF.saml.xmlsec1_binary, sample_returncode, sample_output))
-        self.assertEqual(expected_log, logger_fixture.output)
+        def side_effect(*args, **kwargs):
+            if args[0] == ['/usr/bin/which', CONF.saml.xmlsec1_binary]:
+                return '/usr/bin/xmlsec1\n'
+            else:
+                raise subprocess.CalledProcessError(
+                    returncode=sample_returncode, cmd=CONF.saml.xmlsec1_binary,
+                    output=sample_output
+                )
+
+        with mock.patch.object(subprocess, 'check_output',
+                               side_effect=side_effect):
+            logger_fixture = self.useFixture(fixtures.LoggerFixture())
+            self.assertRaises(
+                exception.SAMLSigningError,
+                keystone_idp._sign_assertion,
+                self.signed_assertion
+            )
+
+            # The function __str__ in subprocess.CalledProcessError is
+            # different between py3.6 and lower python version.
+            expected_log = (
+                "Error when signing assertion, reason: Command '%s' returned "
+                "non-zero exit status %s\.? %s\n" %
+                (CONF.saml.xmlsec1_binary, sample_returncode, sample_output))
+            self.assertRegex(logger_fixture.output,
+                             re.compile(r'%s' % expected_log))
 
     @mock.patch('oslo_utils.fileutils.write_to_tempfile')
-    def test_sign_assertion_fileutils_exc(self, write_to_tempfile_mock):
+    @mock.patch.object(subprocess, 'check_output')
+    def test_sign_assertion_fileutils_exc(self, check_output_mock,
+                                          write_to_tempfile_mock):
         exception_msg = 'fake'
         write_to_tempfile_mock.side_effect = Exception(exception_msg)
+        check_output_mock.return_value = '/usr/bin/xmlsec1'
 
         logger_fixture = self.useFixture(fixtures.LoggerFixture())
         self.assertRaises(exception.SAMLSigningError,
@@ -4020,6 +4277,22 @@ class SAMLGenerationTests(test_v3.RestfulTestCase):
         expected_log = (
             'Error when signing assertion, reason: %s\n' % exception_msg)
         self.assertEqual(expected_log, logger_fixture.output)
+
+    def test_sign_assertion_logs_message_if_xmlsec1_is_not_installed(self):
+        with mock.patch.object(subprocess, 'check_output') as co_mock:
+            co_mock.side_effect = subprocess.CalledProcessError(
+                returncode=1, cmd=CONF.saml.xmlsec1_binary,
+            )
+            logger_fixture = self.useFixture(fixtures.LoggerFixture())
+            self.assertRaises(
+                exception.SAMLSigningError,
+                keystone_idp._sign_assertion,
+                self.signed_assertion
+            )
+
+            expected_log = ('Unable to locate xmlsec1 binary on the system. '
+                            'Check to make sure it is installed.\n')
+            self.assertEqual(expected_log, logger_fixture.output)
 
 
 class IdPMetadataGenerationTests(test_v3.RestfulTestCase):
@@ -4163,20 +4436,10 @@ class ServiceProviderTests(test_v3.RestfulTestCase):
         super(ServiceProviderTests, self).setUp()
         # Add a Service Provider
         url = self.base_url(suffix=self.SERVICE_PROVIDER_ID)
-        self.SP_REF = self.sp_ref()
+        self.SP_REF = core.new_service_provider_ref()
         self.SERVICE_PROVIDER = self.put(
             url, body={'service_provider': self.SP_REF},
             expected_status=http_client.CREATED).result
-
-    def sp_ref(self):
-        ref = {
-            'auth_url': 'https://' + uuid.uuid4().hex + '.com',
-            'enabled': True,
-            'description': uuid.uuid4().hex,
-            'sp_url': 'https://' + uuid.uuid4().hex + '.com',
-            'relay_state_prefix': CONF.saml.relay_state_prefix
-        }
-        return ref
 
     def base_url(self, suffix=None):
         if suffix is not None:
@@ -4187,7 +4450,7 @@ class ServiceProviderTests(test_v3.RestfulTestCase):
         """Create default Service Provider."""
         url = self.base_url(suffix=uuid.uuid4().hex)
         if body is None:
-            body = self.sp_ref()
+            body = core.new_service_provider_ref()
         resp = self.put(url, body={'service_provider': body},
                         expected_status=http_client.CREATED)
         return resp
@@ -4205,7 +4468,7 @@ class ServiceProviderTests(test_v3.RestfulTestCase):
 
     def test_create_service_provider(self):
         url = self.base_url(suffix=uuid.uuid4().hex)
-        sp = self.sp_ref()
+        sp = core.new_service_provider_ref()
         resp = self.put(url, body={'service_provider': sp},
                         expected_status=http_client.CREATED)
         self.assertValidEntity(resp.result['service_provider'],
@@ -4223,7 +4486,7 @@ class ServiceProviderTests(test_v3.RestfulTestCase):
 
         # Create a new service provider.
         url = self.base_url(suffix=uuid.uuid4().hex)
-        sp = self.sp_ref()
+        sp = core.new_service_provider_ref()
         self.put(url, body={'service_provider': sp},
                  expected_status=http_client.CREATED)
 
@@ -4247,7 +4510,7 @@ class ServiceProviderTests(test_v3.RestfulTestCase):
 
         # Create a new service provider.
         url = self.base_url(suffix=uuid.uuid4().hex)
-        sp = self.sp_ref()
+        sp = core.new_service_provider_ref()
         self.put(url, body={'service_provider': sp},
                  expected_status=http_client.CREATED)
 
@@ -4283,7 +4546,7 @@ class ServiceProviderTests(test_v3.RestfulTestCase):
         # Create a new service provider.
         service_provider_id = uuid.uuid4().hex
         url = self.base_url(suffix=service_provider_id)
-        sp = self.sp_ref()
+        sp = core.new_service_provider_ref()
         self.put(url, body={'service_provider': sp},
                  expected_status=http_client.CREATED)
 
@@ -4313,7 +4576,7 @@ class ServiceProviderTests(test_v3.RestfulTestCase):
     def test_create_sp_relay_state_default(self):
         """Create an SP without relay state, should default to `ss:mem`."""
         url = self.base_url(suffix=uuid.uuid4().hex)
-        sp = self.sp_ref()
+        sp = core.new_service_provider_ref()
         del sp['relay_state_prefix']
         resp = self.put(url, body={'service_provider': sp},
                         expected_status=http_client.CREATED)
@@ -4324,7 +4587,7 @@ class ServiceProviderTests(test_v3.RestfulTestCase):
     def test_create_sp_relay_state_non_default(self):
         """Create an SP with custom relay state."""
         url = self.base_url(suffix=uuid.uuid4().hex)
-        sp = self.sp_ref()
+        sp = core.new_service_provider_ref()
         non_default_prefix = uuid.uuid4().hex
         sp['relay_state_prefix'] = non_default_prefix
         resp = self.put(url, body={'service_provider': sp},
@@ -4336,7 +4599,7 @@ class ServiceProviderTests(test_v3.RestfulTestCase):
     def test_create_service_provider_fail(self):
         """Try adding SP object with unallowed attribute."""
         url = self.base_url(suffix=uuid.uuid4().hex)
-        sp = self.sp_ref()
+        sp = core.new_service_provider_ref()
         sp[uuid.uuid4().hex] = uuid.uuid4().hex
         self.put(url, body={'service_provider': sp},
                  expected_status=http_client.BAD_REQUEST)
@@ -4350,8 +4613,8 @@ class ServiceProviderTests(test_v3.RestfulTestCase):
 
         """
         ref_service_providers = {
-            uuid.uuid4().hex: self.sp_ref(),
-            uuid.uuid4().hex: self.sp_ref(),
+            uuid.uuid4().hex: core.new_service_provider_ref(),
+            uuid.uuid4().hex: core.new_service_provider_ref(),
         }
         for id, sp in ref_service_providers.items():
             url = self.base_url(suffix=id)
@@ -4383,7 +4646,7 @@ class ServiceProviderTests(test_v3.RestfulTestCase):
         properly changed.
 
         """
-        new_sp_ref = self.sp_ref()
+        new_sp_ref = core.new_service_provider_ref()
         url = self.base_url(suffix=self.SERVICE_PROVIDER_ID)
         resp = self.patch(url, body={'service_provider': new_sp_ref})
         patch_result = resp.result
@@ -4411,14 +4674,14 @@ class ServiceProviderTests(test_v3.RestfulTestCase):
                    expected_status=http_client.BAD_REQUEST)
 
     def test_update_service_provider_unknown_parameter(self):
-        new_sp_ref = self.sp_ref()
+        new_sp_ref = core.new_service_provider_ref()
         new_sp_ref[uuid.uuid4().hex] = uuid.uuid4().hex
         url = self.base_url(suffix=self.SERVICE_PROVIDER_ID)
         self.patch(url, body={'service_provider': new_sp_ref},
                    expected_status=http_client.BAD_REQUEST)
 
     def test_update_service_provider_returns_not_found(self):
-        new_sp_ref = self.sp_ref()
+        new_sp_ref = core.new_service_provider_ref()
         new_sp_ref['description'] = uuid.uuid4().hex
         url = self.base_url(suffix=uuid.uuid4().hex)
         self.patch(url, body={'service_provider': new_sp_ref},
@@ -4426,7 +4689,7 @@ class ServiceProviderTests(test_v3.RestfulTestCase):
 
     def test_update_sp_relay_state(self):
         """Update an SP with custom relay state."""
-        new_sp_ref = self.sp_ref()
+        new_sp_ref = core.new_service_provider_ref()
         non_default_prefix = uuid.uuid4().hex
         new_sp_ref['relay_state_prefix'] = non_default_prefix
         url = self.base_url(suffix=self.SERVICE_PROVIDER_ID)
@@ -4473,7 +4736,7 @@ class ServiceProviderTests(test_v3.RestfulTestCase):
             return sp.get('id')
 
         sp1_id = get_id(self._create_default_sp())
-        sp2_ref = self.sp_ref()
+        sp2_ref = core.new_service_provider_ref()
         sp2_ref['enabled'] = False
         sp2_id = get_id(self._create_default_sp(body=sp2_ref))
 
@@ -4504,10 +4767,6 @@ class WebSSOTests(FederatedTokenTests):
     ORIGIN = urllib.parse.quote_plus(TRUSTED_DASHBOARD)
     PROTOCOL_REMOTE_ID_ATTR = uuid.uuid4().hex
 
-    def setUp(self):
-        super(WebSSOTests, self).setUp()
-        self.api = federation_controllers.Auth()
-
     def config_overrides(self):
         super(WebSSOTests, self).config_overrides()
         self.config_fixture.config(
@@ -4518,34 +4777,39 @@ class WebSSOTests(FederatedTokenTests):
 
     def test_render_callback_template(self):
         token_id = uuid.uuid4().hex
-        resp = self.api.render_html_response(self.TRUSTED_DASHBOARD, token_id)
+        with self.make_request():
+            resp = (
+                auth_api._AuthFederationWebSSOBase._render_template_response(
+                    self.TRUSTED_DASHBOARD, token_id))
         # The expected value in the assertions bellow need to be 'str' in
         # Python 2 and 'bytes' in Python 3
-        self.assertIn(token_id.encode('utf-8'), resp.body)
-        self.assertIn(self.TRUSTED_DASHBOARD.encode('utf-8'), resp.body)
+        self.assertIn(token_id.encode('utf-8'), resp.data)
+        self.assertIn(self.TRUSTED_DASHBOARD.encode('utf-8'), resp.data)
 
     def test_federated_sso_auth(self):
         environment = {self.REMOTE_ID_ATTR: self.REMOTE_IDS[0],
                        'QUERY_STRING': 'origin=%s' % self.ORIGIN}
         environment.update(mapping_fixtures.EMPLOYEE_ASSERTION)
-        request = self.make_request(environ=environment)
-        resp = self.api.federated_sso_auth(request, self.PROTOCOL)
-        # `resp.body` will be `str` in Python 2 and `bytes` in Python 3
+        with self.make_request(environ=environment):
+            resp = auth_api.AuthFederationWebSSOResource._perform_auth(
+                self.PROTOCOL)
+        # `resp.data` will be `str` in Python 2 and `bytes` in Python 3
         # which is why expected value: `self.TRUSTED_DASHBOARD`
         # needs to be encoded
-        self.assertIn(self.TRUSTED_DASHBOARD.encode('utf-8'), resp.body)
+        self.assertIn(self.TRUSTED_DASHBOARD.encode('utf-8'), resp.data)
 
     def test_get_sso_origin_host_case_insensitive(self):
         # test lowercase hostname in trusted_dashboard
         environ = {'QUERY_STRING': 'origin=http://horizon.com'}
-        request = self.make_request(environ=environ)
-        host = self.api._get_sso_origin_host(request)
-        self.assertEqual("http://horizon.com", host)
-        # test uppercase hostname in trusted_dashboard
-        self.config_fixture.config(group='federation',
-                                   trusted_dashboard=['http://Horizon.com'])
-        host = self.api._get_sso_origin_host(request)
-        self.assertEqual("http://horizon.com", host)
+        with self.make_request(environ=environ):
+            host = auth_api._get_sso_origin_host()
+            self.assertEqual("http://horizon.com", host)
+            # test uppercase hostname in trusted_dashboard
+            self.config_fixture.config(
+                group='federation',
+                trusted_dashboard=['http://Horizon.com'])
+            host = auth_api._get_sso_origin_host()
+            self.assertEqual("http://horizon.com", host)
 
     def test_federated_sso_auth_with_protocol_specific_remote_id(self):
         self.config_fixture.config(
@@ -4555,76 +4819,82 @@ class WebSSOTests(FederatedTokenTests):
         environment = {self.PROTOCOL_REMOTE_ID_ATTR: self.REMOTE_IDS[0],
                        'QUERY_STRING': 'origin=%s' % self.ORIGIN}
         environment.update(mapping_fixtures.EMPLOYEE_ASSERTION)
-        request = self.make_request(environ=environment)
-        resp = self.api.federated_sso_auth(request, self.PROTOCOL)
-        # `resp.body` will be `str` in Python 2 and `bytes` in Python 3
+        with self.make_request(environ=environment):
+            resp = auth_api.AuthFederationWebSSOResource._perform_auth(
+                self.PROTOCOL)
+        # `resp.data` will be `str` in Python 2 and `bytes` in Python 3
         # which is why expected value: `self.TRUSTED_DASHBOARD`
         # needs to be encoded
-        self.assertIn(self.TRUSTED_DASHBOARD.encode('utf-8'), resp.body)
+        self.assertIn(self.TRUSTED_DASHBOARD.encode('utf-8'), resp.data)
 
     def test_federated_sso_auth_bad_remote_id(self):
         environment = {self.REMOTE_ID_ATTR: self.IDP,
                        'QUERY_STRING': 'origin=%s' % self.ORIGIN}
         environment.update(mapping_fixtures.EMPLOYEE_ASSERTION)
-        request = self.make_request(environ=environment)
-        self.assertRaises(exception.IdentityProviderNotFound,
-                          self.api.federated_sso_auth,
-                          request, self.PROTOCOL)
+        with self.make_request(environ=environment):
+            self.assertRaises(
+                exception.IdentityProviderNotFound,
+                auth_api.AuthFederationWebSSOResource._perform_auth,
+                self.PROTOCOL)
 
     def test_federated_sso_missing_query(self):
         environment = {self.REMOTE_ID_ATTR: self.REMOTE_IDS[0]}
         environment.update(mapping_fixtures.EMPLOYEE_ASSERTION)
-        request = self.make_request(environ=environment)
-        self.assertRaises(exception.ValidationError,
-                          self.api.federated_sso_auth,
-                          request, self.PROTOCOL)
+        with self.make_request(environ=environment):
+            self.assertRaises(
+                exception.ValidationError,
+                auth_api.AuthFederationWebSSOResource._perform_auth,
+                self.PROTOCOL)
 
     def test_federated_sso_missing_query_bad_remote_id(self):
         environment = {self.REMOTE_ID_ATTR: self.IDP}
         environment.update(mapping_fixtures.EMPLOYEE_ASSERTION)
-        request = self.make_request(environ=environment)
-        self.assertRaises(exception.ValidationError,
-                          self.api.federated_sso_auth,
-                          request, self.PROTOCOL)
+        with self.make_request(environ=environment):
+            self.assertRaises(
+                exception.ValidationError,
+                auth_api.AuthFederationWebSSOResource._perform_auth,
+                self.PROTOCOL)
 
     def test_federated_sso_untrusted_dashboard(self):
         environment = {self.REMOTE_ID_ATTR: self.REMOTE_IDS[0],
                        'QUERY_STRING': 'origin=%s' % uuid.uuid4().hex}
         environment.update(mapping_fixtures.EMPLOYEE_ASSERTION)
-        request = self.make_request(environ=environment)
-        self.assertRaises(exception.Unauthorized,
-                          self.api.federated_sso_auth,
-                          request, self.PROTOCOL)
+        with self.make_request(environ=environment):
+            self.assertRaises(
+                exception.Unauthorized,
+                auth_api.AuthFederationWebSSOResource._perform_auth,
+                self.PROTOCOL)
 
     def test_federated_sso_untrusted_dashboard_bad_remote_id(self):
         environment = {self.REMOTE_ID_ATTR: self.IDP,
                        'QUERY_STRING': 'origin=%s' % uuid.uuid4().hex}
         environment.update(mapping_fixtures.EMPLOYEE_ASSERTION)
-        request = self.make_request(environ=environment)
-        self.assertRaises(exception.Unauthorized,
-                          self.api.federated_sso_auth,
-                          request, self.PROTOCOL)
+        with self.make_request(environ=environment):
+            self.assertRaises(
+                exception.Unauthorized,
+                auth_api.AuthFederationWebSSOResource._perform_auth,
+                self.PROTOCOL)
 
     def test_federated_sso_missing_remote_id(self):
         environment = copy.deepcopy(mapping_fixtures.EMPLOYEE_ASSERTION)
-        request = self.make_request(environ=environment,
-                                    query_string='origin=%s' % self.ORIGIN)
-        self.assertRaises(exception.Unauthorized,
-                          self.api.federated_sso_auth,
-                          request, self.PROTOCOL)
+        with self.make_request(environ=environment,
+                               query_string='origin=%s' % self.ORIGIN):
+            self.assertRaises(
+                exception.Unauthorized,
+                auth_api.AuthFederationWebSSOResource._perform_auth,
+                self.PROTOCOL)
 
     def test_identity_provider_specific_federated_authentication(self):
         environment = {self.REMOTE_ID_ATTR: self.REMOTE_IDS[0]}
         environment.update(mapping_fixtures.EMPLOYEE_ASSERTION)
-        request = self.make_request(environ=environment,
-                                    query_string='origin=%s' % self.ORIGIN)
-        resp = self.api.federated_idp_specific_sso_auth(request,
-                                                        self.idp['id'],
-                                                        self.PROTOCOL)
-        # `resp.body` will be `str` in Python 2 and `bytes` in Python 3
+        with self.make_request(environ=environment,
+                               query_string='origin=%s' % self.ORIGIN):
+            resp = auth_api.AuthFederationWebSSOIDPsResource._perform_auth(
+                self.idp['id'], self.PROTOCOL)
+        # `resp.data` will be `str` in Python 2 and `bytes` in Python 3
         # which is why the expected value: `self.TRUSTED_DASHBOARD`
         # needs to be encoded
-        self.assertIn(self.TRUSTED_DASHBOARD.encode('utf-8'), resp.body)
+        self.assertIn(self.TRUSTED_DASHBOARD.encode('utf-8'), resp.data)
 
 
 class K2KServiceCatalogTests(test_v3.RestfulTestCase):
@@ -4635,35 +4905,23 @@ class K2KServiceCatalogTests(test_v3.RestfulTestCase):
     def setUp(self):
         super(K2KServiceCatalogTests, self).setUp()
 
-        sp = self.sp_ref()
-        self.federation_api.create_sp(self.SP1, sp)
+        sp = core.new_service_provider_ref()
+        PROVIDERS.federation_api.create_sp(self.SP1, sp)
         self.sp_alpha = {self.SP1: sp}
 
-        sp = self.sp_ref()
-        self.federation_api.create_sp(self.SP2, sp)
+        sp = core.new_service_provider_ref()
+        PROVIDERS.federation_api.create_sp(self.SP2, sp)
         self.sp_beta = {self.SP2: sp}
 
-        sp = self.sp_ref()
-        self.federation_api.create_sp(self.SP3, sp)
+        sp = core.new_service_provider_ref()
+        PROVIDERS.federation_api.create_sp(self.SP3, sp)
         self.sp_gamma = {self.SP3: sp}
-
-        self.token_v3_helper = token_common.V3TokenDataHelper()
 
     def sp_response(self, id, ref):
         ref.pop('enabled')
         ref.pop('description')
         ref.pop('relay_state_prefix')
         ref['id'] = id
-        return ref
-
-    def sp_ref(self):
-        ref = {
-            'auth_url': uuid.uuid4().hex,
-            'enabled': True,
-            'description': uuid.uuid4().hex,
-            'sp_url': uuid.uuid4().hex,
-            'relay_state_prefix': CONF.saml.relay_state_prefix,
-        }
         return ref
 
     def _validate_service_providers(self, token, ref):
@@ -4680,7 +4938,10 @@ class K2KServiceCatalogTests(test_v3.RestfulTestCase):
 
     def test_service_providers_in_token(self):
         """Check if service providers are listed in service catalog."""
-        token = self.token_v3_helper.get_token_data(self.user_id, ['password'])
+        model = token_model.TokenModel()
+        model.user_id = self.user_id
+        model.methods = ['password']
+        token = render_token.render_token_response_from_model(model)
         ref = {}
         for r in (self.sp_alpha, self.sp_beta, self.sp_gamma):
             ref.update(r)
@@ -4695,9 +4956,12 @@ class K2KServiceCatalogTests(test_v3.RestfulTestCase):
         """
         # disable service provider ALPHA
         sp_ref = {'enabled': False}
-        self.federation_api.update_sp(self.SP1, sp_ref)
+        PROVIDERS.federation_api.update_sp(self.SP1, sp_ref)
 
-        token = self.token_v3_helper.get_token_data(self.user_id, ['password'])
+        model = token_model.TokenModel()
+        model.user_id = self.user_id
+        model.methods = ['password']
+        token = render_token.render_token_response_from_model(model)
         ref = {}
         for r in (self.sp_beta, self.sp_gamma):
             ref.update(r)
@@ -4712,9 +4976,12 @@ class K2KServiceCatalogTests(test_v3.RestfulTestCase):
         """
         sp_ref = {'enabled': False}
         for sp in (self.SP1, self.SP2, self.SP3):
-            self.federation_api.update_sp(sp, sp_ref)
+            PROVIDERS.federation_api.update_sp(sp, sp_ref)
 
-        token = self.token_v3_helper.get_token_data(self.user_id, ['password'])
+        model = token_model.TokenModel()
+        model.user_id = self.user_id
+        model.methods = ['password']
+        token = render_token.render_token_response_from_model(model)
         self.assertNotIn('service_providers', token['token'],
                          message=('Expected Service Catalog not to have '
                                   'service_providers'))

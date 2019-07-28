@@ -30,9 +30,9 @@ from keystone.identity.backends.ldap import models
 CONF = keystone.conf.CONF
 LOG = log.getLogger(__name__)
 
-_DEPRECATION_MSG = _('%s for the LDAP identity backend has been deprecated in '
-                     'the Mitaka release in favor of read-only identity LDAP '
-                     'access. It will be removed in the "O" release.')
+_DEPRECATION_MSG = ('%s for the LDAP identity backend has been deprecated in '
+                    'the Mitaka release in favor of read-only identity LDAP '
+                    'access. It will be removed in the "O" release.')
 
 READ_ONLY_LDAP_ERROR_MESSAGE = _("LDAP does not support write operations")
 
@@ -311,8 +311,11 @@ class UserApi(common_ldap.EnabledEmuMixIn, common_ldap.BaseLdap):
         return obj
 
     def get_filtered(self, user_id):
-        user = self.get(user_id)
-        return self.filter_attributes(user)
+        try:
+            user = self.get(user_id)
+            return self.filter_attributes(user)
+        except ldap.NO_SUCH_OBJECT:
+            raise self.NotFound(user_id=user_id)
 
     def get_all(self, ldap_filter=None, hints=None):
         objs = super(UserApi, self).get_all(ldap_filter=ldap_filter,

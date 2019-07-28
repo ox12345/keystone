@@ -14,8 +14,7 @@
 import fixtures
 
 from keystone import auth
-from keystone.common import dependency
-from keystone.server import common
+import keystone.server
 
 
 class BackendLoader(fixtures.Fixture):
@@ -28,13 +27,8 @@ class BackendLoader(fixtures.Fixture):
     def setUp(self):
         super(BackendLoader, self).setUp()
 
-        # TODO(blk-u): Shouldn't need to clear the registry here, but some
-        # tests call load_backends multiple times. These should be fixed to
-        # only call load_backends once.
-        dependency.reset()
-
         self.clear_auth_plugin_registry()
-        drivers, _unused = common.setup_backends()
+        drivers, _unused = keystone.server.setup_backends()
 
         for manager_name, manager in drivers.items():
             setattr(self._testcase, manager_name, manager)

@@ -10,15 +10,15 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+from functools import partial
 import sys
 
 from oslo_log import log
-from oslo_log import versionutils
-from oslo_utils import importutils
 import six
 import stevedore
 
-from keystone.common import dependency
+from keystone.common import driver_hints
+from keystone.common import provider_api
 from keystone.common import utils
 import keystone.conf
 from keystone import exception
@@ -27,36 +27,23 @@ from keystone.identity.backends import resource_options as ro
 
 
 LOG = log.getLogger(__name__)
-
 CONF = keystone.conf.CONF
+PROVIDERS = provider_api.ProviderAPIs
 
 # registry of authentication methods
 AUTH_METHODS = {}
 AUTH_PLUGINS_LOADED = False
 
 
+def _get_auth_driver_manager(namespace, plugin_name):
+    return stevedore.DriverManager(namespace, plugin_name, invoke_on_load=True)
+
+
 def load_auth_method(method):
     plugin_name = CONF.auth.get(method) or 'default'
     namespace = 'keystone.auth.%s' % method
-    try:
-        driver_manager = stevedore.DriverManager(namespace, plugin_name,
-                                                 invoke_on_load=True)
-        return driver_manager.driver
-    except RuntimeError:
-        LOG.debug('Failed to load the %s driver (%s) using stevedore, will '
-                  'attempt to load using import_object instead.',
-                  method, plugin_name)
-
-    driver = importutils.import_object(plugin_name)
-
-    msg = (_(
-        'Direct import of auth plugin %(name)r is deprecated as of Liberty in '
-        'favor of its entrypoint from %(namespace)r and may be removed in '
-        'N.') %
-        {'name': plugin_name, 'namespace': namespace})
-    versionutils.report_deprecated_feature(LOG, msg)
-
-    return driver
+    driver_manager = _get_auth_driver_manager(namespace, plugin_name)
+    return driver_manager.driver
 
 
 def load_auth_methods():
@@ -132,8 +119,7 @@ class AuthContext(dict):
                 self[key] = val
 
 
-@dependency.requires('resource_api', 'trust_api')
-class AuthInfo(object):
+class AuthInfo(provider_api.ProviderAPIMixin, object):
     """Encapsulation of "auth" request."""
 
     @staticmethod
@@ -144,17 +130,19 @@ class AuthInfo(object):
 
     def __init__(self, auth=None):
         self.auth = auth
-        self._scope_data = (None, None, None, None)
-        # self._scope_data is (domain_id, project_id, trust_ref, unscoped)
-        # project scope: (None, project_id, None, None)
-        # domain scope: (domain_id, None, None, None)
-        # trust scope: (None, None, trust_ref, None)
-        # unscoped: (None, None, None, 'unscoped')
+        self._scope_data = (None, None, None, None, None)
+        # self._scope_data is
+        # (domain_id, project_id, trust_ref, unscoped, system)
+        # project scope: (None, project_id, None, None, None)
+        # domain scope: (domain_id, None, None, None, None)
+        # trust scope: (None, None, trust_ref, None, None)
+        # unscoped: (None, None, None, 'unscoped', None)
+        # system: (None, None, None, None, 'all')
 
     def _assert_project_is_enabled(self, project_ref):
         # ensure the project is enabled
         try:
-            self.resource_api.assert_project_enabled(
+            PROVIDERS.resource_api.assert_project_enabled(
                 project_id=project_ref['id'],
                 project=project_ref)
         except AssertionError as e:
@@ -164,7 +152,7 @@ class AuthInfo(object):
 
     def _assert_domain_is_enabled(self, domain_ref):
         try:
-            self.resource_api.assert_domain_enabled(
+            PROVIDERS.resource_api.assert_domain_enabled(
                 domain_id=domain_ref['id'],
                 domain=domain_ref)
         except AssertionError as e:
@@ -179,13 +167,15 @@ class AuthInfo(object):
             if domain_name:
                 if (CONF.resource.domain_name_url_safe == 'strict' and
                         utils.is_not_url_safe(domain_name)):
-                    msg = _('Domain name cannot contain reserved characters.')
+                    msg = 'Domain name cannot contain reserved characters.'
+                    tr_msg = _('Domain name cannot contain reserved '
+                               'characters.')
                     LOG.warning(msg)
-                    raise exception.Unauthorized(message=msg)
-                domain_ref = self.resource_api.get_domain_by_name(
+                    raise exception.Unauthorized(message=tr_msg)
+                domain_ref = PROVIDERS.resource_api.get_domain_by_name(
                     domain_name)
             else:
-                domain_ref = self.resource_api.get_domain(domain_id)
+                domain_ref = PROVIDERS.resource_api.get_domain(domain_id)
         except exception.DomainNotFound as e:
             LOG.warning(six.text_type(e))
             raise exception.Unauthorized(e)
@@ -199,21 +189,26 @@ class AuthInfo(object):
             if project_name:
                 if (CONF.resource.project_name_url_safe == 'strict' and
                         utils.is_not_url_safe(project_name)):
-                    msg = _('Project name cannot contain reserved characters.')
+                    msg = 'Project name cannot contain reserved characters.'
+                    tr_msg = _('Project name cannot contain reserved '
+                               'characters.')
                     LOG.warning(msg)
-                    raise exception.Unauthorized(message=msg)
+                    raise exception.Unauthorized(message=tr_msg)
                 if 'domain' not in project_info:
                     raise exception.ValidationError(attribute='domain',
                                                     target='project')
                 domain_ref = self._lookup_domain(project_info['domain'])
-                project_ref = self.resource_api.get_project_by_name(
+                project_ref = PROVIDERS.resource_api.get_project_by_name(
                     project_name, domain_ref['id'])
             else:
-                project_ref = self.resource_api.get_project(project_id)
+                project_ref = PROVIDERS.resource_api.get_project(project_id)
+                domain_id = project_ref['domain_id']
+                if not domain_id:
+                    raise exception.ProjectNotFound(project_id=project_id)
                 # NOTE(morganfainberg): The _lookup_domain method will raise
                 # exception.Unauthorized if the domain isn't found or is
                 # disabled.
-                self._lookup_domain({'id': project_ref['domain_id']})
+                self._lookup_domain({'id': domain_id})
         except exception.ProjectNotFound as e:
             LOG.warning(six.text_type(e))
             raise exception.Unauthorized(e)
@@ -225,41 +220,95 @@ class AuthInfo(object):
         if not trust_id:
             raise exception.ValidationError(attribute='trust_id',
                                             target='trust')
-        trust = self.trust_api.get_trust(trust_id)
+        trust = PROVIDERS.trust_api.get_trust(trust_id)
         return trust
+
+    def _lookup_app_cred(self, app_cred_info):
+        app_cred_id = app_cred_info.get('id')
+        if app_cred_id:
+            get_app_cred = partial(
+                PROVIDERS.application_credential_api.get_application_credential
+            )
+            return get_app_cred(app_cred_id)
+        name = app_cred_info.get('name')
+        if not name:
+            raise exception.ValidationError(attribute='name or ID',
+                                            target='application credential')
+        user = app_cred_info.get('user')
+        if not user:
+            raise exception.ValidationError(attribute='user',
+                                            target='application credential')
+        user_id = user.get('id')
+        if not user_id:
+            if 'domain' not in user:
+                raise exception.ValidationError(attribute='domain',
+                                                target='user')
+            domain_ref = self._lookup_domain(user['domain'])
+            user_id = PROVIDERS.identity_api.get_user_by_name(
+                user['name'], domain_ref['id'])['id']
+        hints = driver_hints.Hints()
+        hints.add_filter('name', name)
+        app_cred_api = PROVIDERS.application_credential_api
+        app_creds = app_cred_api.list_application_credentials(
+            user_id, hints)
+        if len(app_creds) != 1:
+            message = "Could not find application credential: %s" % name
+            tr_message = _("Could not find application credential: %s") % name
+            LOG.warning(six.text_type(message))
+            raise exception.Unauthorized(tr_message)
+        return app_creds[0]
+
+    def _set_scope_from_app_cred(self, app_cred_info):
+        app_cred_ref = self._lookup_app_cred(app_cred_info)
+        self._scope_data = (None, app_cred_ref['project_id'], None, None, None)
+        return
 
     def _validate_and_normalize_scope_data(self):
         """Validate and normalize scope data."""
+        if 'identity' in self.auth:
+            if 'application_credential' in self.auth['identity']['methods']:
+                # Application credentials can't choose their own scope
+                if 'scope' in self.auth:
+                    detail = "Application credentials cannot request a scope."
+                    raise exception.ApplicationCredentialAuthError(
+                        detail=detail)
+                self._set_scope_from_app_cred(
+                    self.auth['identity']['application_credential'])
+                return
         if 'scope' not in self.auth:
             return
         if sum(['project' in self.auth['scope'],
                 'domain' in self.auth['scope'],
                 'unscoped' in self.auth['scope'],
+                'system' in self.auth['scope'],
                 'OS-TRUST:trust' in self.auth['scope']]) != 1:
-            raise exception.ValidationError(
-                attribute='project, domain, OS-TRUST:trust or unscoped',
-                target='scope')
+            msg = 'system, project, domain, OS-TRUST:trust or unscoped'
+            raise exception.ValidationError(attribute=msg, target='scope')
+        if 'system' in self.auth['scope']:
+            self._scope_data = (None, None, None, None, 'all')
+            return
         if 'unscoped' in self.auth['scope']:
-            self._scope_data = (None, None, None, 'unscoped')
+            self._scope_data = (None, None, None, 'unscoped', None)
             return
         if 'project' in self.auth['scope']:
             project_ref = self._lookup_project(self.auth['scope']['project'])
-            self._scope_data = (None, project_ref['id'], None, None)
+            self._scope_data = (None, project_ref['id'], None, None, None)
         elif 'domain' in self.auth['scope']:
             domain_ref = self._lookup_domain(self.auth['scope']['domain'])
-            self._scope_data = (domain_ref['id'], None, None, None)
+            self._scope_data = (domain_ref['id'], None, None, None, None)
         elif 'OS-TRUST:trust' in self.auth['scope']:
-            if not CONF.trust.enabled:
-                raise exception.Forbidden('Trusts are disabled.')
             trust_ref = self._lookup_trust(
                 self.auth['scope']['OS-TRUST:trust'])
             # TODO(ayoung): when trusts support domains, fill in domain data
             if trust_ref.get('project_id') is not None:
                 project_ref = self._lookup_project(
                     {'id': trust_ref['project_id']})
-                self._scope_data = (None, project_ref['id'], trust_ref, None)
+                self._scope_data = (
+                    None, project_ref['id'], trust_ref, None, None
+                )
+
             else:
-                self._scope_data = (None, None, trust_ref, None)
+                self._scope_data = (None, None, trust_ref, None, None)
 
     def _validate_auth_methods(self):
         # make sure all the method data/payload are provided
@@ -324,22 +373,25 @@ class AuthInfo(object):
 
         Verify and return the scoping information.
 
-        :returns: (domain_id, project_id, trust_ref, unscoped).
-                   If scope to a project, (None, project_id, None, None)
+        :returns: (domain_id, project_id, trust_ref, unscoped, system).
+                   If scope to a project, (None, project_id, None, None, None)
                    will be returned.
-                   If scoped to a domain, (domain_id, None, None, None)
+                   If scoped to a domain, (domain_id, None, None, None, None)
                    will be returned.
-                   If scoped to a trust, (None, project_id, trust_ref, None),
+                   If scoped to a trust,
+                   (None, project_id, trust_ref, None, None),
                    Will be returned, where the project_id comes from the
                    trust definition.
-                   If unscoped, (None, None, None, 'unscoped') will be
+                   If unscoped, (None, None, None, 'unscoped', None) will be
+                   returned.
+                   If system_scoped, (None, None, None, None, 'all') will be
                    returned.
 
         """
         return self._scope_data
 
     def set_scope(self, domain_id=None, project_id=None, trust=None,
-                  unscoped=None):
+                  unscoped=None, system=None):
         """Set scope information."""
         if domain_id and project_id:
             msg = _('Scoping to both domain and project is not allowed')
@@ -350,20 +402,26 @@ class AuthInfo(object):
         if project_id and trust:
             msg = _('Scoping to both project and trust is not allowed')
             raise ValueError(msg)
-        self._scope_data = (domain_id, project_id, trust, unscoped)
+        if system and project_id:
+            msg = _('Scoping to both project and system is not allowed')
+            raise ValueError(msg)
+        if system and domain_id:
+            msg = _('Scoping to both domain and system is not allowed')
+            raise ValueError(msg)
+        self._scope_data = (domain_id, project_id, trust, unscoped, system)
 
 
-@dependency.requires('identity_api')
-class UserMFARulesValidator(object):
+class UserMFARulesValidator(provider_api.ProviderAPIMixin, object):
     """Helper object that can validate the MFA Rules."""
 
-    @property
-    def _auth_methods(self):
+    @classmethod
+    def _auth_methods(cls):
         if AUTH_PLUGINS_LOADED:
             return set(AUTH_METHODS.keys())
         raise RuntimeError(_('Auth Method Plugins are not loaded.'))
 
-    def check_auth_methods_against_rules(self, user_id, auth_methods):
+    @classmethod
+    def check_auth_methods_against_rules(cls, user_id, auth_methods):
         """Validate the MFA rules against the successful auth methods.
 
         :param user_id: The user's ID (uuid).
@@ -373,11 +431,11 @@ class UserMFARulesValidator(object):
         :returns: Boolean, ``True`` means rules match and auth may proceed,
                   ``False`` means rules do not match.
         """
-        user_ref = self.identity_api.get_user(user_id)
+        user_ref = PROVIDERS.identity_api.get_user(user_id)
         mfa_rules = user_ref['options'].get(ro.MFA_RULES_OPT.option_name, [])
         mfa_rules_enabled = user_ref['options'].get(
             ro.MFA_ENABLED_OPT.option_name, True)
-        rules = self._parse_rule_structure(mfa_rules, user_ref['id'])
+        rules = cls._parse_rule_structure(mfa_rules, user_ref['id'])
 
         if not rules or not mfa_rules_enabled:
             # return quickly if the rules are disabled for the user or not set
@@ -394,7 +452,7 @@ class UserMFARulesValidator(object):
             # disable an auth method, and a rule will still pass making it
             # impossible to accidently lock-out a subset of users with a
             # bad keystone.conf
-            r_set = set(r).intersection(self._auth_methods)
+            r_set = set(r).intersection(cls._auth_methods())
             if set(auth_methods).issuperset(r_set):
                 # Rule Matches no need to continue, return here.
                 LOG.debug('Auth methods for user `%(user_id)s`, `%(methods)s` '
@@ -403,7 +461,7 @@ class UserMFARulesValidator(object):
                           {'user_id': user_id,
                            'rule': list(r_set),
                            'methods': auth_methods,
-                           'loaded': self._auth_methods})
+                           'loaded': cls._auth_methods()})
                 return True
 
         LOG.debug('Auth methods for user `%(user_id)s`, `%(methods)s` did not '

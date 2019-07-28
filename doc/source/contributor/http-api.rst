@@ -18,16 +18,15 @@ Identity API v2.0 and v3 History
 Specifications
 ==============
 
-Keystone implements two major HTTP API versions, along with several API
-extensions that build on top of each core API. The two APIs are specified as
-`Identity API v2.0`_ and `Identity API v3`_. Each API is specified by a single
-source of truth to avoid conflicts between documentation and implementation.
-The original source of truth for the v2.0 API is defined by a set of WADL and
-XSD files. The original source of truth for the v3 API is defined by
-documentation.
+As of the Queens release, Keystone solely implements the `Identity API v3`_.
+Support for Identity API v2.0 has been removed in Queens in favor of
+the `Identity API v3`_.
 
-.. _`Identity API v2.0`: https://developer.openstack.org/api-ref/identity/v2/
-.. _`Identity API v3`: https://developer.openstack.org/api-ref/identity/v3/
+Identity API v3 is a superset of all the functionality available in the
+Identity API v2.0 and several of its extensions, and provides a much more
+consistent developer experience.
+
+.. _`Identity API v3`: https://docs.openstack.org/api-ref/identity/v3/
 
 History
 =======
@@ -47,60 +46,16 @@ by using "domains" as a higher-level container for more flexible identity
 management and fixed a security issue in the v2.0 API (bearer tokens appearing
 in URLs).
 
-Should I use v2.0 or v3?
-========================
-
-Identity API v3.
-
-Identity API v3 is a superset of all the functionality available in v2.0 and
-several of its extensions, and provides a much more consistent developer
-experience to boot. We're also on the road to deprecating, and ultimately
-reducing (or dropping) support for, Identity API v2.0.
-
 How do I migrate from v2.0 to v3?
 =================================
 
 I am a deployer
 ---------------
 
-You'll need to ensure the v3 API is included in your Paste pipeline, usually
-``etc/keystone-paste.ini``. Our `latest sample configuration`_ includes the v3
-application pipeline.
-
-First define a v3 application, which refers to the v3 application factory
-method:
-
-.. code-block:: ini
-
-    [app:service_v3]
-    use = egg:keystone#service_v3
-
-Then define a v3 pipeline, which terminates with the v3 application you defined
-above:
-
-.. code-block:: ini
-
-    [pipeline:api_v3]
-    pipeline = ... service_v3
-
-Replace "..." with whatever middleware you'd like to run in front of the API
-service. Our `latest sample configuration`_ documents our tested
-recommendations, but your requirements may vary.
-
-Finally, include the v3 pipeline in at least one ``composite`` application (but
-usually both ``[composite:main]`` and ``[composite:admin]``), for example:
-
-.. code-block:: ini
-
-    [composite:main]
-    use = egg:Paste#urlmap
-    /v3 = api_v3
-    ...
-
-Once your pipeline is configured to expose both v2.0 and v3, you need to ensure
-that you've configured your service catalog in Keystone correctly. The
-simplest, and most ideal, configuration would expose one identity with
-unversioned endpoints (note the lack of ``/v2.0/`` or ``/v3/`` in these URLs):
+You need to ensure that you've configured your service catalog in Keystone
+correctly. The simplest, and most ideal, configuration would expose one
+identity with unversioned endpoints (note the lack of ``/v2.0/`` or ``/v3/`` in
+these URLs):
 
 - Service (type: ``identity``)
 
@@ -110,6 +65,16 @@ unversioned endpoints (note the lack of ``/v2.0/`` or ``/v3/`` in these URLs):
 If you were to perform a ``GET`` against either of these endpoints, you would
 be greeted by an ``HTTP/1.1 300 Multiple Choices`` response, which newer
 Keystone clients can use to automatically detect available API versions.
+
+.. NOTE::
+
+    Deploying v3 only requires a single application since administrator and
+    end-user operations are handled by the same process, and not separated into
+    two different applications. Depending on how v2.0 was configured, you might
+    be able to decommission one endpoint. Until users are educated about which
+    endpoint to use, the former admin API (e.g.  using port 35357) and the
+    public API (e.g. using port 5000) can run the v3 API simulateously and
+    serve both sets of users.
 
 .. code-block:: bash
 
@@ -125,7 +90,6 @@ Keystone clients can use to automatically detect available API versions.
 With unversioned ``identity`` endpoints in the service catalog, you should be
 able to `authenticate with keystoneclient`_ successfully.
 
-.. _`latest sample configuration`: https://git.openstack.org/cgit/openstack/keystone/tree/etc/keystone-paste.ini
 .. _`authenticate with keystoneclient`: https://docs.openstack.org/python-keystoneclient/latest/using-api-v3.html#authenticating-using-sessions
 
 I have a Python client
@@ -140,7 +104,7 @@ contribute!
 Adopting `python-keystoneclient`_ should be the easiest way to migrate to
 Identity API v3.
 
-.. _`python-keystoneclient`: https://pypi.python.org/pypi/python-keystoneclient/
+.. _`python-keystoneclient`: https://pypi.org/project/python-keystoneclient/
 
 I have a non-Python client
 --------------------------
@@ -148,7 +112,7 @@ I have a non-Python client
 You'll likely need to heavily reference our `API documentation`_ to port your
 application to Identity API v3.
 
-.. _`API documentation`: https://git.openstack.org/cgit/openstack-attic/identity-api/tree/v3/src/markdown/identity-api-v3.md
+.. _`API documentation`: https://docs.openstack.org/api-ref/identity/v3/
 
 The most common operation would be password-based authentication including a
 tenant name (i.e. project name) to specify an authorization scope. In Identity
@@ -233,8 +197,9 @@ merged into one. Instead of isolating functionality into separate applications,
 all functionality was consolidated into a single application. Each v3 endpoint
 or API is protected by policy instead. This makes deployment and management of
 Keystone's infrastructure easier for operators to deploy and for users to
-consume. As a result, Keystone deployments interested in only the v3 API are
-not required to deploy separate ``admin`` and ``public`` endpoints.
+consume. As a result, Keystone deployments are not required to deploy separate
+``admin`` and ``public`` endpoints, especially now that the v2.0 API
+implementation has been removed.
 
 HTTP/1.1 Chunked Encoding
 =========================

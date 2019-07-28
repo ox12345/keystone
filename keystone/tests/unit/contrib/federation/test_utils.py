@@ -10,11 +10,11 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import flask
 import uuid
 
 from oslo_config import fixture as config_fixture
 from oslo_serialization import jsonutils
-import webob
 
 from keystone.auth.plugins import mapped
 import keystone.conf
@@ -31,25 +31,31 @@ FAKE_MAPPING_ID = uuid.uuid4().hex
 class MappingRuleEngineTests(unit.BaseTestCase):
     """A class for testing the mapping rule engine."""
 
+    def setUp(self):
+        super(MappingRuleEngineTests, self).setUp()
+        # create dummy app so we can setup a request context for our
+        # tests.
+        self.flask_app = flask.Flask(__name__)
+        self.cleanup_instance('flask_app')
+
     def assertValidMappedUserObject(self, mapped_properties,
                                     user_type='ephemeral',
                                     domain_id=None):
         """Check whether mapped properties object has 'user' within.
 
         According to today's rules, RuleProcessor does not have to issue user's
-        id or name. What's actually required is user's type and for ephemeral
-        users that would be service domain named 'Federated'.
+        id or name. What's actually required is user's type.
         """
         self.assertIn('user', mapped_properties,
                       message='Missing user object in mapped properties')
         user = mapped_properties['user']
         self.assertIn('type', user)
         self.assertEqual(user_type, user['type'])
-        self.assertIn('domain', user)
-        domain = user['domain']
-        domain_name_or_id = domain.get('id') or domain.get('name')
-        domain_ref = domain_id or 'Federated'
-        self.assertEqual(domain_ref, domain_name_or_id)
+
+        if domain_id:
+            domain = user['domain']
+            domain_name_or_id = domain.get('id') or domain.get('name')
+            self.assertEqual(domain_id, domain_name_or_id)
 
     def test_rule_engine_any_one_of_and_direct_mapping(self):
         """Should return user's name and group id EMPLOYEE_GROUP_ID.
@@ -490,7 +496,7 @@ class MappingRuleEngineTests(unit.BaseTestCase):
             domain_id=mapping_fixtures.LOCAL_DOMAIN)
 
     def test_user_identifications_name(self):
-        """Test varius mapping options and how users are identified.
+        """Test various mapping options and how users are identified.
 
         This test calls mapped.setup_username() for propagating user object.
 
@@ -510,12 +516,12 @@ class MappingRuleEngineTests(unit.BaseTestCase):
         self.assertValidMappedUserObject(mapped_properties)
         self.assertEqual('jsmith', mapped_properties['user']['name'])
         unique_id, display_name = mapped.get_user_unique_id_and_display_name(
-            {}, mapped_properties)
+            mapped_properties)
         self.assertEqual('jsmith', unique_id)
         self.assertEqual('jsmith', display_name)
 
     def test_user_identifications_name_and_federated_domain(self):
-        """Test varius mapping options and how users are identified.
+        """Test various mapping options and how users are identified.
 
         This test calls mapped.setup_username() for propagating user object.
 
@@ -533,12 +539,12 @@ class MappingRuleEngineTests(unit.BaseTestCase):
         self.assertIsNotNone(mapped_properties)
         self.assertValidMappedUserObject(mapped_properties)
         unique_id, display_name = mapped.get_user_unique_id_and_display_name(
-            {}, mapped_properties)
+            mapped_properties)
         self.assertEqual('tbo', display_name)
         self.assertEqual('abc123%40example.com', unique_id)
 
     def test_user_identification_id(self):
-        """Test varius mapping options and how users are identified.
+        """Test various mapping options and how users are identified.
 
         This test calls mapped.setup_username() for propagating user object.
 
@@ -549,20 +555,36 @@ class MappingRuleEngineTests(unit.BaseTestCase):
         as it was not explicitly specified in the mapping.
 
         """
-        request = webob.Request.blank('/')
         mapping = mapping_fixtures.MAPPING_USER_IDS
         rp = mapping_utils.RuleProcessor(FAKE_MAPPING_ID, mapping['rules'])
         assertion = mapping_fixtures.ADMIN_ASSERTION
         mapped_properties = rp.process(assertion)
         self.assertIsNotNone(mapped_properties)
         self.assertValidMappedUserObject(mapped_properties)
-        unique_id, display_name = mapped.get_user_unique_id_and_display_name(
-            request, mapped_properties)
+        with self.flask_app.test_request_context():
+            unique_id, display_name = (
+                mapped.get_user_unique_id_and_display_name(mapped_properties))
         self.assertEqual('bob', unique_id)
         self.assertEqual('bob', display_name)
 
+    def test_get_user_unique_id_and_display_name(self):
+
+        mapping = mapping_fixtures.MAPPING_USER_IDS
+        assertion = mapping_fixtures.ADMIN_ASSERTION
+        FAKE_MAPPING_ID = uuid.uuid4().hex
+        rp = mapping_utils.RuleProcessor(FAKE_MAPPING_ID, mapping['rules'])
+        mapped_properties = rp.process(assertion)
+        self.assertIsNotNone(mapped_properties)
+        self.assertValidMappedUserObject(mapped_properties)
+        with self.flask_app.test_request_context(
+                environ_base={'REMOTE_USER': 'remote_user'}):
+            unique_id, display_name = (
+                mapped.get_user_unique_id_and_display_name(mapped_properties))
+        self.assertEqual('bob', unique_id)
+        self.assertEqual('remote_user', display_name)
+
     def test_user_identification_id_and_name(self):
-        """Test varius mapping options and how users are identified.
+        """Test various mapping options and how users are identified.
 
         This test calls mapped.setup_username() for propagating user object.
 
@@ -582,7 +604,6 @@ class MappingRuleEngineTests(unit.BaseTestCase):
         not to change it.
 
         """
-        request = webob.Request.blank('/')
         testcases = [(mapping_fixtures.CUSTOMER_ASSERTION, 'bwilliams'),
                      (mapping_fixtures.EMPLOYEE_ASSERTION, 'tbo')]
         for assertion, exp_user_name in testcases:
@@ -592,8 +613,7 @@ class MappingRuleEngineTests(unit.BaseTestCase):
             self.assertIsNotNone(mapped_properties)
             self.assertValidMappedUserObject(mapped_properties)
             unique_id, display_name = (
-                mapped.get_user_unique_id_and_display_name(request,
-                                                           mapped_properties)
+                mapped.get_user_unique_id_and_display_name(mapped_properties)
             )
             self.assertEqual(exp_user_name, display_name)
             self.assertEqual('abc123%40example.com', unique_id)
@@ -651,6 +671,12 @@ class MappingRuleEngineTests(unit.BaseTestCase):
 
     def test_mapping_validation_with_group_id_and_domain(self):
         mapping = mapping_fixtures.MAPPING_GROUP_ID_WITH_DOMAIN
+        self.assertRaises(exception.ValidationError,
+                          mapping_utils.validate_mapping_structure,
+                          mapping)
+
+    def test_mapping_validation_with_bad_local_type_user_in_assertion(self):
+        mapping = mapping_fixtures.MAPPING_BAD_LOCAL_TYPE_USER_IN_ASSERTION
         self.assertRaises(exception.ValidationError,
                           mapping_utils.validate_mapping_structure,
                           mapping)
@@ -806,12 +832,14 @@ class TestUnicodeAssertionData(unit.BaseTestCase):
         # pulled from the HTTP headers. These bytes may be decodable as
         # ISO-8859-1 according to Section 3.2.4 of RFC 7230. Let's assume
         # that our web server plugins are correctly encoding the data.
-        request = webob.Request.blank(
-            '/path',
-            environ=mapping_fixtures.UNICODE_NAME_ASSERTION)
-        data = mapping_utils.get_assertion_params_from_env(request)
-        # NOTE(dstanek): keystone.auth.plugins.mapped
-        return dict(data)
+        # Create a dummy application
+        app = flask.Flask(__name__)
+        with app.test_request_context(
+                path='/path',
+                environ_overrides=mapping_fixtures.UNICODE_NAME_ASSERTION):
+            data = mapping_utils.get_assertion_params_from_env()
+            # NOTE(dstanek): keystone.auth.plugins.mapped
+            return dict(data)
 
     def test_unicode(self):
         mapping = self._pull_mapping_rules_from_the_database()
@@ -883,7 +911,6 @@ class TestMappingLocals(unit.BaseTestCase):
         expected = {
             'user': {
                 'name': 'a_user',
-                'domain': {'id': 'Federated'},
                 'type': 'ephemeral'
             },
             'projects': [],
@@ -901,7 +928,6 @@ class TestMappingLocals(unit.BaseTestCase):
         expected = {
             'user': {
                 'name': 'test_a_user',
-                'domain': {'id': 'Federated'},
                 'type': 'ephemeral'
             },
             'projects': [],

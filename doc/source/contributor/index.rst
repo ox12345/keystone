@@ -21,8 +21,10 @@ Contributor Documentation
 .. toctree::
    :maxdepth: 1
 
+   how-can-i-help.rst
    set-up-keystone.rst
    http-api.rst
+   proposing-features.rst
    release-notes.rst
    testing-keystone.rst
    doctor-checks.rst
@@ -32,4 +34,8 @@ Contributor Documentation
    id-manage.rst
    translated-responses.rst
    architecture.rst
-   external-dev.rst
+   services.rst
+   developing-drivers.rst
+   service-catalog.rst
+   vision-reflection.rst
+   programming-exercises.rst

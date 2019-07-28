@@ -124,7 +124,9 @@ class JsonBlob(sql_types.TypeDecorator):
         return jsonutils.dumps(value)
 
     def process_result_value(self, value, dialect):
-        return jsonutils.loads(value)
+        if value is not None:
+            value = jsonutils.loads(value)
+        return value
 
 
 class DateTimeInt(sql_types.TypeDecorator):
@@ -256,6 +258,14 @@ def _get_main_context_manager():
     return _main_context_manager
 
 
+# Now this function is only used for testing FK with sqlite.
+def enable_sqlite_foreign_key():
+    global _main_context_manager
+    if not _main_context_manager:
+        _main_context_manager = enginefacade.transaction_context()
+        _main_context_manager.configure(sqlite_fk=True)
+
+
 def cleanup():
     global _main_context_manager
 
@@ -328,6 +338,8 @@ class _WontMatch(Exception):
         won't match any value in the column in the table.
 
         """
+        if value is None:
+            return
         col = col_attr.property.columns[0]
         if isinstance(col.type, sql.types.Boolean):
             # The column is a Boolean, we should have already validated input.
@@ -513,7 +525,7 @@ def handle_conflicts(conflict_type='object'):
                 name = None
                 field = None
                 domain_id = None
-                # First element is unnessecary for extracting name and causes
+                # First element is unnecessary for extracting name and causes
                 # object not iterable error. Remove it.
                 params = args[1:]
                 # We want to store the duplicate objects name in the error

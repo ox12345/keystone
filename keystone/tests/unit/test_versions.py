@@ -17,50 +17,15 @@ import copy
 import functools
 import random
 
-import mock
 from oslo_serialization import jsonutils
 from six.moves import http_client
 from testtools import matchers as tt_matchers
 import webob
 
+from keystone.api import discovery
 from keystone.common import json_home
 from keystone.tests import unit
-from keystone.tests.unit import utils
-from keystone.version import controllers
 
-
-v2_MEDIA_TYPES = [
-    {
-        "base": "application/json",
-        "type": "application/"
-                "vnd.openstack.identity-v2.0+json"
-    }
-]
-
-v2_HTML_DESCRIPTION = {
-    "rel": "describedby",
-    "type": "text/html",
-    "href": "https://docs.openstack.org/"
-}
-
-
-v2_EXPECTED_RESPONSE = {
-    "id": "v2.0",
-    "status": "deprecated",
-    "updated": "2016-08-04T00:00:00Z",
-    "links": [
-        {
-            "rel": "self",
-            "href": "",     # Will get filled in after initialization
-        },
-        v2_HTML_DESCRIPTION
-    ],
-    "media-types": v2_MEDIA_TYPES
-}
-
-v2_VERSION_RESPONSE = {
-    "version": v2_EXPECTED_RESPONSE
-}
 
 v3_MEDIA_TYPES = [
     {
@@ -71,9 +36,9 @@ v3_MEDIA_TYPES = [
 ]
 
 v3_EXPECTED_RESPONSE = {
-    "id": "v3.8",
+    "id": "v3.12",
     "status": "stable",
-    "updated": "2017-02-22T00:00:00Z",
+    "updated": "2019-01-22T00:00:00Z",
     "links": [
         {
             "rel": "self",
@@ -91,7 +56,6 @@ VERSIONS_RESPONSE = {
     "versions": {
         "values": [
             v3_EXPECTED_RESPONSE,
-            v2_EXPECTED_RESPONSE
         ]
     }
 }
@@ -175,6 +139,12 @@ FEDERATED_AUTH_URL = ('/OS-FEDERATION/identity_providers/{idp_id}'
 FEDERATED_IDP_SPECIFIC_WEBSSO = ('/auth/OS-FEDERATION/identity_providers/'
                                  '{idp_id}/protocols/{protocol_id}/websso')
 
+APPLICATION_CREDENTIAL = ('/users/{user_id}/application_credentials/'
+                          '{application_credential_id}')
+APPLICATION_CREDENTIALS = '/users/{user_id}/application_credentials'
+APPLICATION_CREDENTIAL_RELATION = (
+    json_home.build_v3_parameter_relation('application_credential_id'))
+
 V3_JSON_HOME_RESOURCES = {
     json_home.build_v3_resource_relation('auth_tokens'): {
         'href': '/auth/tokens'},
@@ -184,6 +154,8 @@ V3_JSON_HOME_RESOURCES = {
         'href': '/auth/projects'},
     json_home.build_v3_resource_relation('auth_domains'): {
         'href': '/auth/domains'},
+    json_home.build_v3_resource_relation('auth_system'): {
+        'href': '/auth/system'},
     json_home.build_v3_resource_relation('credential'): {
         'href-template': '/credentials/{credential_id}',
         'href-vars': {
@@ -191,6 +163,32 @@ V3_JSON_HOME_RESOURCES = {
             json_home.build_v3_parameter_relation('credential_id')}},
     json_home.build_v3_resource_relation('credentials'): {
         'href': '/credentials'},
+    json_home.build_v3_resource_relation('system_user_role'): {
+        'href-template': '/system/users/{user_id}/roles/{role_id}',
+        'href-vars': {
+            'user_id': json_home.Parameters.USER_ID,
+            'role_id': json_home.Parameters.ROLE_ID
+        }
+    },
+    json_home.build_v3_resource_relation('system_user_roles'): {
+        'href-template': '/system/users/{user_id}/roles',
+        'href-vars': {
+            'user_id': json_home.Parameters.USER_ID
+        }
+    },
+    json_home.build_v3_resource_relation('system_group_role'): {
+        'href-template': '/system/groups/{group_id}/roles/{role_id}',
+        'href-vars': {
+            'group_id': json_home.Parameters.GROUP_ID,
+            'role_id': json_home.Parameters.ROLE_ID
+        }
+    },
+    json_home.build_v3_resource_relation('system_group_roles'): {
+        'href-template': '/system/groups/{group_id}/roles',
+        'href-vars': {
+            'group_id': json_home.Parameters.GROUP_ID
+        }
+    },
     json_home.build_v3_resource_relation('domain'): {
         'href-template': '/domains/{domain_id}',
         'href-vars': {'domain_id': json_home.Parameters.DOMAIN_ID, }},
@@ -332,8 +330,8 @@ V3_JSON_HOME_RESOURCES = {
     json_home.build_v3_resource_relation('implied_roles'): {
         'href-template': '/roles/{prior_role_id}/implies',
         'href-vars': {
-            'prior_role_id': json_home.Parameters.ROLE_ID},
-        'hints': {'status': 'experimental'}},
+            'prior_role_id': json_home.Parameters.ROLE_ID}
+    },
     json_home.build_v3_resource_relation('implied_role'): {
         'href-template':
         '/roles/{prior_role_id}/implies/{implied_role_id}',
@@ -341,10 +339,10 @@ V3_JSON_HOME_RESOURCES = {
             'prior_role_id': json_home.Parameters.ROLE_ID,
             'implied_role_id': json_home.Parameters.ROLE_ID,
         },
-        'hints': {'status': 'experimental'}},
+    },
     json_home.build_v3_resource_relation('role_inferences'): {
         'href': '/role_inferences',
-        'hints': {'status': 'experimental'}},
+    },
     json_home.build_v3_resource_relation('role_assignments'): {
         'href': '/role_assignments'},
     json_home.build_v3_resource_relation('roles'): {'href': '/roles'},
@@ -393,7 +391,7 @@ V3_JSON_HOME_RESOURCES = {
     {
         'href-template': '/OS-FEDERATION/identity_providers/{idp_id}',
         'href-vars': {'idp_id': IDP_ID_PARAMETER_RELATION, }},
-    _build_federation_rel(resource_name='identity_providers'): {
+    _build_federation_rel(resource_name='identity_providers_websso'): {
         'href-template': FEDERATED_IDP_SPECIFIC_WEBSSO,
         'href-vars': {
             'idp_id': IDP_ID_PARAMETER_RELATION,
@@ -609,7 +607,41 @@ V3_JSON_HOME_RESOURCES = {
         'href-template': '/domains/config/{group}/{option}/default',
         'href-vars': {
             'group': json_home.build_v3_parameter_relation('config_group'),
-            'option': json_home.build_v3_parameter_relation('config_option')}}
+            'option': json_home.build_v3_parameter_relation('config_option')}},
+    json_home.build_v3_resource_relation('registered_limits'): {
+        'hints': {'status': 'experimental'},
+        'href': '/registered_limits'},
+    json_home.build_v3_resource_relation('registered_limit'): {
+        'href-template': '/registered_limits/{registered_limit_id}',
+        'href-vars': {
+            'registered_limit_id': json_home.build_v3_parameter_relation(
+                'registered_limit_id')
+        },
+        'hints': {'status': 'experimental'}
+    },
+    json_home.build_v3_resource_relation('limits'): {
+        'hints': {'status': 'experimental'},
+        'href': '/limits'},
+    json_home.build_v3_resource_relation('limit'): {
+        'href-template': '/limits/{limit_id}',
+        'href-vars': {
+            'limit_id': json_home.build_v3_parameter_relation('limit_id')
+        },
+        'hints': {'status': 'experimental'}
+    },
+    json_home.build_v3_resource_relation('limit_model'): {
+        'href': '/limits/model',
+        'hints': {'status': 'experimental'}
+    },
+    json_home.build_v3_resource_relation('application_credentials'): {
+        'href-template': APPLICATION_CREDENTIALS,
+        'href-vars': {
+            'user_id': json_home.build_v3_parameter_relation('user_id')}},
+    json_home.build_v3_resource_relation('application_credential'): {
+        'href-template': APPLICATION_CREDENTIAL,
+        'href-vars': {
+            'application_credential_id': APPLICATION_CREDENTIAL_RELATION,
+            'user_id': json_home.build_v3_parameter_relation('user_id')}}
 }
 
 
@@ -665,15 +697,11 @@ class VersionTestCase(unit.TestCase):
     def setUp(self):
         super(VersionTestCase, self).setUp()
         self.load_backends()
-        self.public_app = self.loadapp('keystone', 'main')
-        self.admin_app = self.loadapp('keystone', 'admin')
-
-        self.admin_port = random.randint(10000, 30000)
+        self.public_app = self.loadapp('public')
         self.public_port = random.randint(40000, 60000)
 
         self.config_fixture.config(
-            public_endpoint='http://localhost:%d' % self.public_port,
-            admin_endpoint='http://localhost:%d' % self.admin_port)
+            public_endpoint='http://localhost:%d' % self.public_port)
 
     def config_overrides(self):
         super(VersionTestCase, self).config_overrides()
@@ -693,30 +721,12 @@ class VersionTestCase(unit.TestCase):
             if version['id'].startswith('v3'):
                 self._paste_in_port(
                     version, 'http://localhost:%s/v3/' % self.public_port)
-            elif version['id'] == 'v2.0':
-                self._paste_in_port(
-                    version, 'http://localhost:%s/v2.0/' % self.public_port)
-        self.assertThat(data, _VersionsEqual(expected))
-
-    def test_admin_versions(self):
-        client = TestClient(self.admin_app)
-        resp = client.get('/')
-        self.assertEqual(300, resp.status_int)
-        data = jsonutils.loads(resp.body)
-        expected = VERSIONS_RESPONSE
-        for version in expected['versions']['values']:
-            if version['id'].startswith('v3'):
-                self._paste_in_port(
-                    version, 'http://localhost:%s/v3/' % self.admin_port)
-            elif version['id'] == 'v2.0':
-                self._paste_in_port(
-                    version, 'http://localhost:%s/v2.0/' % self.admin_port)
         self.assertThat(data, _VersionsEqual(expected))
 
     def test_use_site_url_if_endpoint_unset(self):
-        self.config_fixture.config(public_endpoint=None, admin_endpoint=None)
+        self.config_fixture.config(public_endpoint=None)
 
-        for app in (self.public_app, self.admin_app):
+        for app in (self.public_app,):
             client = TestClient(app)
             resp = client.get('/')
             self.assertEqual(300, resp.status_int)
@@ -727,41 +737,7 @@ class VersionTestCase(unit.TestCase):
                 if version['id'].startswith('v3'):
                     self._paste_in_port(
                         version, 'http://localhost/v3/')
-                elif version['id'] == 'v2.0':
-                    self._paste_in_port(
-                        version, 'http://localhost/v2.0/')
             self.assertThat(data, _VersionsEqual(expected))
-
-    def test_public_version_v2(self):
-        client = TestClient(self.public_app)
-        resp = client.get('/v2.0/')
-        self.assertEqual(http_client.OK, resp.status_int)
-        data = jsonutils.loads(resp.body)
-        expected = v2_VERSION_RESPONSE
-        self._paste_in_port(expected['version'],
-                            'http://localhost:%s/v2.0/' % self.public_port)
-        self.assertEqual(expected, data)
-
-    def test_admin_version_v2(self):
-        client = TestClient(self.admin_app)
-        resp = client.get('/v2.0/')
-        self.assertEqual(http_client.OK, resp.status_int)
-        data = jsonutils.loads(resp.body)
-        expected = v2_VERSION_RESPONSE
-        self._paste_in_port(expected['version'],
-                            'http://localhost:%s/v2.0/' % self.admin_port)
-        self.assertEqual(expected, data)
-
-    def test_use_site_url_if_endpoint_unset_v2(self):
-        self.config_fixture.config(public_endpoint=None, admin_endpoint=None)
-        for app in (self.public_app, self.admin_app):
-            client = TestClient(app)
-            resp = client.get('/v2.0/')
-            self.assertEqual(http_client.OK, resp.status_int)
-            data = jsonutils.loads(resp.body)
-            expected = v2_VERSION_RESPONSE
-            self._paste_in_port(expected['version'], 'http://localhost/v2.0/')
-            self.assertEqual(data, expected)
 
     def test_public_version_v3(self):
         client = TestClient(self.public_app)
@@ -773,20 +749,9 @@ class VersionTestCase(unit.TestCase):
                             'http://localhost:%s/v3/' % self.public_port)
         self.assertEqual(expected, data)
 
-    @utils.wip('waiting on bug #1381961')
-    def test_admin_version_v3(self):
-        client = TestClient(self.admin_app)
-        resp = client.get('/v3/')
-        self.assertEqual(http_client.OK, resp.status_int)
-        data = jsonutils.loads(resp.body)
-        expected = v3_VERSION_RESPONSE
-        self._paste_in_port(expected['version'],
-                            'http://localhost:%s/v3/' % self.admin_port)
-        self.assertEqual(expected, data)
-
     def test_use_site_url_if_endpoint_unset_v3(self):
-        self.config_fixture.config(public_endpoint=None, admin_endpoint=None)
-        for app in (self.public_app, self.admin_app):
+        self.config_fixture.config(public_endpoint=None)
+        for app in (self.public_app,):
             client = TestClient(app)
             resp = client.get('/v3/')
             self.assertEqual(http_client.OK, resp.status_int)
@@ -795,12 +760,16 @@ class VersionTestCase(unit.TestCase):
             self._paste_in_port(expected['version'], 'http://localhost/v3/')
             self.assertEqual(expected, data)
 
-    @mock.patch.object(controllers, '_VERSIONS', ['v3'])
     def test_v2_disabled(self):
+        # NOTE(morgan): This test should be kept, v2.0 is removed and should
+        # never return, this prevents regression[s]/v2.0 discovery doc
+        # slipping back in.
         client = TestClient(self.public_app)
         # request to /v2.0 should fail
         resp = client.get('/v2.0/')
-        self.assertEqual(http_client.NOT_FOUND, resp.status_int)
+        # NOTE(morgan): getting a 418 here is indicative of a 404, but from
+        # the flask app itself (not a handled 404 such as UserNotFound)
+        self.assertEqual(418, resp.status_int)
 
         # request to /v3 should pass
         resp = client.get('/v3/')
@@ -826,37 +795,6 @@ class VersionTestCase(unit.TestCase):
         data = jsonutils.loads(resp.body)
         self.assertEqual(v3_only_response, data)
 
-    @mock.patch.object(controllers, '_VERSIONS', ['v2.0'])
-    def test_v3_disabled(self):
-        client = TestClient(self.public_app)
-        # request to /v3 should fail
-        resp = client.get('/v3/')
-        self.assertEqual(http_client.NOT_FOUND, resp.status_int)
-
-        # request to /v2.0 should pass
-        resp = client.get('/v2.0/')
-        self.assertEqual(http_client.OK, resp.status_int)
-        data = jsonutils.loads(resp.body)
-        expected = v2_VERSION_RESPONSE
-        self._paste_in_port(expected['version'],
-                            'http://localhost:%s/v2.0/' % self.public_port)
-        self.assertEqual(expected, data)
-
-        # only v2 information should be displayed by requests to /
-        v2_only_response = {
-            "versions": {
-                "values": [
-                    v2_EXPECTED_RESPONSE
-                ]
-            }
-        }
-        self._paste_in_port(v2_only_response['versions']['values'][0],
-                            'http://localhost:%s/v2.0/' % self.public_port)
-        resp = client.get('/')
-        self.assertEqual(300, resp.status_int)
-        data = jsonutils.loads(resp.body)
-        self.assertEqual(v2_only_response, data)
-
     def _test_json_home(self, path, exp_json_home_data):
         client = TestClient(self.public_app)
         resp = client.get(path, headers={'Accept': 'application/json-home'})
@@ -864,9 +802,14 @@ class VersionTestCase(unit.TestCase):
         self.assertThat(resp.status, tt_matchers.Equals('200 OK'))
         self.assertThat(resp.headers['Content-Type'],
                         tt_matchers.Equals('application/json-home'))
-
-        self.assertThat(jsonutils.loads(resp.body),
-                        tt_matchers.Equals(exp_json_home_data))
+        maxDiff = self.maxDiff
+        self.maxDiff = None
+        # NOTE(morgan): Changed from tt_matchers.Equals to make it easier to
+        # determine issues. Reset maxDiff to the original value at the end
+        # of the assert.
+        self.assertDictEqual(exp_json_home_data,
+                             jsonutils.loads(resp.body))
+        self.maxDiff = maxDiff
 
     def test_json_home_v3(self):
         # If the request is /v3 and the Accept header is application/json-home
@@ -899,8 +842,8 @@ class VersionTestCase(unit.TestCase):
             self.assertThat(resp.status, tt_matchers.Equals('200 OK'))
             return resp.headers['Content-Type']
 
-        JSON = controllers.MimeTypes.JSON
-        JSON_HOME = controllers.MimeTypes.JSON_HOME
+        JSON = discovery.MimeTypes.JSON
+        JSON_HOME = discovery.MimeTypes.JSON_HOME
 
         JSON_MATCHER = tt_matchers.Equals(JSON)
         JSON_HOME_MATCHER = tt_matchers.Equals(JSON_HOME)
@@ -929,17 +872,6 @@ class VersionTestCase(unit.TestCase):
         # If request some unknown mime-type, get JSON.
         self.assertThat(make_request(self.getUniqueString()), JSON_MATCHER)
 
-    @mock.patch.object(controllers, '_VERSIONS', [])
-    def test_no_json_home_document_returned_when_v3_disabled(self):
-        json_home_document = controllers.request_v3_json_home('some_prefix')
-        expected_document = {'resources': {}}
-        self.assertEqual(expected_document, json_home_document)
-
-    def test_extension_property_method_returns_none(self):
-        extension_obj = controllers.Extensions()
-        extensions_property = extension_obj.extensions
-        self.assertIsNone(extensions_property)
-
 
 class VersionSingleAppTestCase(unit.TestCase):
     """Test running with a single application loaded.
@@ -953,12 +885,10 @@ class VersionSingleAppTestCase(unit.TestCase):
         super(VersionSingleAppTestCase, self).setUp()
         self.load_backends()
 
-        self.admin_port = random.randint(10000, 30000)
         self.public_port = random.randint(40000, 60000)
 
         self.config_fixture.config(
-            public_endpoint='http://localhost:%d' % self.public_port,
-            admin_endpoint='http://localhost:%d' % self.admin_port)
+            public_endpoint='http://localhost:%d' % self.public_port)
 
     def config_overrides(self):
         super(VersionSingleAppTestCase, self).config_overrides()
@@ -969,77 +899,28 @@ class VersionSingleAppTestCase(unit.TestCase):
                 link['href'] = port
 
     def _test_version(self, app_name):
-        def app_port():
-            if app_name == 'admin':
-                return self.admin_port
-            else:
-                return self.public_port
-        app = self.loadapp('keystone', app_name)
+        app = self.loadapp(app_name)
         client = TestClient(app)
         resp = client.get('/')
         self.assertEqual(300, resp.status_int)
         data = jsonutils.loads(resp.body)
         expected = VERSIONS_RESPONSE
+        url_with_port = 'http://localhost:%s/v3/' % self.public_port
         for version in expected['versions']['values']:
+            # TODO(morgan): Eliminate the need to do the "paste-in-port" part
+            # of the tests. Ultimately, this is very hacky and shows we are
+            # not setting up the test case sanely.
             if version['id'].startswith('v3'):
                 self._paste_in_port(
-                    version, 'http://localhost:%s/v3/' % app_port())
-            elif version['id'] == 'v2.0':
-                self._paste_in_port(
-                    version, 'http://localhost:%s/v2.0/' % app_port())
+                    version, url_with_port)
+        # Explicitly check that a location header is set and it is pointing
+        # to v3 (The preferred location for now)!
+        self.assertIn('Location', resp.headers)
+        self.assertEqual(url_with_port, resp.headers['Location'])
         self.assertThat(data, _VersionsEqual(expected))
 
     def test_public(self):
-        self._test_version('main')
+        self._test_version('public')
 
     def test_admin(self):
         self._test_version('admin')
-
-
-class VersionBehindSslTestCase(unit.TestCase):
-    def setUp(self):
-        super(VersionBehindSslTestCase, self).setUp()
-        self.load_backends()
-        self.public_app = self.loadapp('keystone', 'main')
-
-    def config_overrides(self):
-        super(VersionBehindSslTestCase, self).config_overrides()
-        self.config_fixture.config(
-            secure_proxy_ssl_header='HTTP_X_FORWARDED_PROTO')
-
-    def _paste_in_port(self, response, port):
-        for link in response['links']:
-            if link['rel'] == 'self':
-                link['href'] = port
-
-    def _get_expected(self, host):
-        expected = VERSIONS_RESPONSE
-        for version in expected['versions']['values']:
-            if version['id'].startswith('v3'):
-                self._paste_in_port(version, host + 'v3/')
-            elif version['id'] == 'v2.0':
-                self._paste_in_port(version, host + 'v2.0/')
-        return expected
-
-    def test_versions_without_headers(self):
-        client = TestClient(self.public_app)
-        host_name = 'host-%d' % random.randint(10, 30)
-        host_port = random.randint(10000, 30000)
-        host = 'http://%s:%s/' % (host_name, host_port)
-        resp = client.get(host)
-        self.assertEqual(300, resp.status_int)
-        data = jsonutils.loads(resp.body)
-        expected = self._get_expected(host)
-        self.assertThat(data, _VersionsEqual(expected))
-
-    def test_versions_with_header(self):
-        client = TestClient(self.public_app)
-        host_name = 'host-%d' % random.randint(10, 30)
-        host_port = random.randint(10000, 30000)
-        resp = client.get('http://%s:%s/' % (host_name, host_port),
-                          headers={'X-Forwarded-Proto': 'https'})
-        self.assertEqual(300, resp.status_int)
-        data = jsonutils.loads(resp.body)
-        expected = self._get_expected('https://%s:%s/' % (host_name,
-                                                          host_port))
-        self.assertThat(data, _VersionsEqual(expected))

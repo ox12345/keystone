@@ -6,6 +6,13 @@ Identity service, code-named keystone, on the controller node. For
 scalability purposes, this configuration deploys Fernet tokens and
 the Apache HTTP server to handle requests.
 
+.. note::
+
+   Ensure that you have completed the prerequisite installation steps in the
+   `Openstack Install Guide
+   <https://docs.openstack.org/install-guide/environment-packages-obs.html#finalize-the-installation>`_
+   before proceeding.
+
 Prerequisites
 -------------
 
@@ -15,7 +22,7 @@ create a database.
 .. note::
 
    Before you begin, ensure you have the most recent version of
-   ``python-pyasn1`` `installed <https://pypi.python.org/pypi/pyasn1>`_.
+   ``python-pyasn1`` `installed <https://pypi.org/project/pyasn1>`_.
 
 #. Use the database access client to connect to the database
    server as the ``root`` user:
@@ -58,13 +65,6 @@ Install and configure components
 
 .. note::
 
-   This guide uses the Apache HTTP server with ``mod_wsgi`` to serve
-   Identity service requests on ports 5000 and 35357. By default, the
-   keystone service still listens on these ports. Therefore, this guide
-   manually disables the keystone service.
-
-.. note::
-
     Starting with the Newton release, SUSE OpenStack packages are shipping
     with the upstream default configuration files. For example
     ``/etc/keystone/keystone.conf``, with customizations in
@@ -77,7 +77,7 @@ Install and configure components
 
    .. code-block:: console
 
-      # zypper install openstack-keystone apache2-mod_wsgi
+      # zypper install openstack-keystone apache2 apache2-mod_wsgi
 
    .. end
 
@@ -132,10 +132,17 @@ Install and configure components
 
 5. Bootstrap the Identity service:
 
+   .. note::
+
+      Before the Queens release, keystone needed to be run on two separate ports to
+      accommodate the Identity v2 API which ran a separate admin-only service
+      commonly on port 35357. With the removal of the v2 API, keystone can be run
+      on the same port for all interfaces.
+
    .. code-block:: console
 
       # keystone-manage bootstrap --bootstrap-password ADMIN_PASS \
-        --bootstrap-admin-url http://controller:35357/v3/ \
+        --bootstrap-admin-url http://controller:5000/v3/ \
         --bootstrap-internal-url http://controller:5000/v3/ \
         --bootstrap-public-url http://controller:5000/v3/ \
         --bootstrap-region-id RegionOne
@@ -157,6 +164,8 @@ Configure the Apache HTTP server
 
    .. end
 
+   The ``APACHE_SERVERNAME`` entry will need to be added if it does not already exist.
+
 #. Create the ``/etc/apache2/conf.d/wsgi-keystone.conf`` file
    with the following content:
 
@@ -164,27 +173,11 @@ Configure the Apache HTTP server
    .. code-block:: apache
 
       Listen 5000
-      Listen 35357
 
       <VirtualHost *:5000>
           WSGIDaemonProcess keystone-public processes=5 threads=1 user=keystone group=keystone display-name=%{GROUP}
           WSGIProcessGroup keystone-public
           WSGIScriptAlias / /usr/bin/keystone-wsgi-public
-          WSGIApplicationGroup %{GLOBAL}
-          WSGIPassAuthorization On
-          ErrorLogFormat "%{cu}t %M"
-          ErrorLog /var/log/apache2/keystone.log
-          CustomLog /var/log/apache2/keystone_access.log combined
-
-          <Directory /usr/bin>
-              Require all granted
-          </Directory>
-      </VirtualHost>
-
-      <VirtualHost *:35357>
-          WSGIDaemonProcess keystone-admin processes=5 threads=1 user=keystone group=keystone display-name=%{GROUP}
-          WSGIProcessGroup keystone-admin
-          WSGIScriptAlias / /usr/bin/keystone-wsgi-admin
           WSGIApplicationGroup %{GLOBAL}
           WSGIPassAuthorization On
           ErrorLogFormat "%{cu}t %M"
@@ -206,6 +199,12 @@ Configure the Apache HTTP server
 
    .. end
 
+SSL
+^^^
+
+A secure deployment should have the web server configured to use SSL or running
+behind an SSL terminator.
+
 Finalize the installation
 -------------------------
 
@@ -219,7 +218,7 @@ Finalize the installation
 
    .. end
 
-2. Configure the administrative account
+2. Configure the administrative account by setting the proper environmental variables:
 
    .. code-block:: console
 
@@ -228,10 +227,12 @@ Finalize the installation
       $ export OS_PROJECT_NAME=admin
       $ export OS_USER_DOMAIN_NAME=Default
       $ export OS_PROJECT_DOMAIN_NAME=Default
-      $ export OS_AUTH_URL=http://controller:35357/v3
+      $ export OS_AUTH_URL=http://controller:5000/v3
       $ export OS_IDENTITY_API_VERSION=3
 
    .. end
+
+   These values shown here are the default ones created from ``keystone-manage bootstrap``.
 
    Replace ``ADMIN_PASS`` with the password used in the
    ``keystone-manage bootstrap`` command in `keystone-install-configure-obs`_.

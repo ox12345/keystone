@@ -12,7 +12,6 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-from keystone.common import dependency
 from keystone.common import sql
 from keystone.identity.mapping_backends import base
 from keystone.identity.mapping_backends import mapping as identity_mapping
@@ -35,7 +34,6 @@ class IDMapping(sql.ModelBase, sql.ModelDictMixin):
         sql.UniqueConstraint('domain_id', 'local_id', 'entity_type'),)
 
 
-@dependency.requires('id_generator_api')
 class Mapping(base.MappingDriverBase):
 
     def get_public_id(self, local_entity):
@@ -57,9 +55,12 @@ class Mapping(base.MappingDriverBase):
             except sql.NotFound:
                 return None
 
-    def get_domain_mapping_list(self, domain_id):
+    def get_domain_mapping_list(self, domain_id, entity_type=None):
+        filters = {'domain_id': domain_id}
+        if entity_type is not None:
+            filters['entity_type'] = entity_type
         with sql.session_for_read() as session:
-            return session.query(IDMapping).filter_by(domain_id=domain_id)
+            return session.query(IDMapping).filter_by(**filters)
 
     def get_id_mapping(self, public_id):
         with sql.session_for_read() as session:

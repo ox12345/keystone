@@ -14,25 +14,24 @@
 
 from keystone.auth import plugins as auth_plugins
 from keystone.auth.plugins import base
-from keystone.common import dependency
+from keystone.common import provider_api
 from keystone import exception
 from keystone.i18n import _
 
 
 METHOD_NAME = 'password'
+PROVIDERS = provider_api.ProviderAPIs
 
 
-@dependency.requires('identity_api')
 class Password(base.AuthMethodHandler):
 
-    def authenticate(self, request, auth_payload):
+    def authenticate(self, auth_payload):
         """Try to authenticate against the identity backend."""
         response_data = {}
         user_info = auth_plugins.UserAuthInfo.create(auth_payload, METHOD_NAME)
 
         try:
-            self.identity_api.authenticate(
-                request,
+            PROVIDERS.identity_api.authenticate(
                 user_id=user_info.user_id,
                 password=user_info.password)
         except AssertionError:

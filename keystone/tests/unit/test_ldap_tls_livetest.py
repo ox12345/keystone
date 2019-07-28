@@ -14,7 +14,9 @@
 # under the License.
 
 import ldap.modlist
+from six import PY2
 
+from keystone.common import provider_api
 import keystone.conf
 from keystone import exception
 from keystone import identity
@@ -23,10 +25,18 @@ from keystone.tests.unit import test_ldap_livetest
 
 
 CONF = keystone.conf.CONF
+PROVIDERS = provider_api.ProviderAPIs
 
 
 def create_object(dn, attrs):
-    conn = ldap.initialize(CONF.ldap.url)
+    if PY2:
+        # NOTE: Once https://github.com/python-ldap/python-ldap/issues/249
+        # is released, we can pass bytes_strictness='warn' as a parameter to
+        # ldap.initialize instead of setting it after ldap.initialize.
+        conn = ldap.initialize(CONF.ldap.url, bytes_mode=False)
+        conn.bytes_strictness = 'warn'
+    else:
+        conn = ldap.initialize(CONF.ldap.url)
     conn.simple_bind_s(CONF.ldap.user, CONF.ldap.password)
     ldif = ldap.modlist.addModlist(attrs)
     conn.add_s(dn, ldif)
@@ -48,45 +58,45 @@ class LiveTLSLDAPIdentity(test_ldap_livetest.LiveLDAPIdentity):
                                    use_tls=True,
                                    tls_cacertdir=None,
                                    tls_req_cert='demand')
-        self.identity_api = identity.backends.ldap.Identity()
+        PROVIDERS.identity_api = identity.backends.ldap.Identity()
 
-        # TODO(shaleh): use new_user_ref()
-        user = {'name': 'fake1',
-                'password': 'fakepass1',
-                'tenants': ['bar']}
-        user = self.identity_api.create_user('user')
-        user_ref = self.identity_api.get_user(user['id'])
+        user = unit.create_user(PROVIDERS.identity_api, 'default',
+                                name='fake1', password='fakepass1')
+        user_ref = PROVIDERS.identity_api.get_user(user['id'])
         self.assertEqual(user['id'], user_ref['id'])
 
         user['password'] = 'fakepass2'
-        self.identity_api.update_user(user['id'], user)
+        PROVIDERS.identity_api.update_user(user['id'], user)
 
-        self.identity_api.delete_user(user['id'])
-        self.assertRaises(exception.UserNotFound, self.identity_api.get_user,
-                          user['id'])
+        PROVIDERS.identity_api.delete_user(user['id'])
+        self.assertRaises(
+            exception.UserNotFound,
+            PROVIDERS.identity_api.get_user,
+            user['id']
+        )
 
     def test_tls_certdir_demand_option(self):
         self.config_fixture.config(group='ldap',
                                    use_tls=True,
                                    tls_cacertdir=None,
                                    tls_req_cert='demand')
-        self.identity_api = identity.backends.ldap.Identity()
+        PROVIDERS.identity_api = identity.backends.ldap.Identity()
 
-        # TODO(shaleh): use new_user_ref()
-        user = {'id': 'fake1',
-                'name': 'fake1',
-                'password': 'fakepass1',
-                'tenants': ['bar']}
-        self.identity_api.create_user('fake1', user)
-        user_ref = self.identity_api.get_user('fake1')
+        user = unit.create_user(PROVIDERS.identity_api, 'default',
+                                id='fake1', name='fake1',
+                                password='fakepass1')
+        user_ref = PROVIDERS.identity_api.get_user('fake1')
         self.assertEqual('fake1', user_ref['id'])
 
         user['password'] = 'fakepass2'
-        self.identity_api.update_user('fake1', user)
+        PROVIDERS.identity_api.update_user('fake1', user)
 
-        self.identity_api.delete_user('fake1')
-        self.assertRaises(exception.UserNotFound, self.identity_api.get_user,
-                          'fake1')
+        PROVIDERS.identity_api.delete_user('fake1')
+        self.assertRaises(
+            exception.UserNotFound,
+            PROVIDERS.identity_api.get_user,
+            'fake1'
+        )
 
     def test_tls_bad_certfile(self):
         self.config_fixture.config(
@@ -95,13 +105,10 @@ class LiveTLSLDAPIdentity(test_ldap_livetest.LiveLDAPIdentity):
             tls_req_cert='demand',
             tls_cacertfile='/etc/keystone/ssl/certs/mythicalcert.pem',
             tls_cacertdir=None)
-        self.identity_api = identity.backends.ldap.Identity()
+        PROVIDERS.identity_api = identity.backends.ldap.Identity()
 
-        # TODO(shaleh): use new_user_ref()
-        user = {'name': 'fake1',
-                'password': 'fakepass1',
-                'tenants': ['bar']}
-        self.assertRaises(IOError, self.identity_api.create_user, user)
+        user = unit.new_user_ref('default')
+        self.assertRaises(IOError, PROVIDERS.identity_api.create_user, user)
 
     def test_tls_bad_certdir(self):
         self.config_fixture.config(
@@ -110,10 +117,7 @@ class LiveTLSLDAPIdentity(test_ldap_livetest.LiveLDAPIdentity):
             tls_cacertfile=None,
             tls_req_cert='demand',
             tls_cacertdir='/etc/keystone/ssl/mythicalcertdir')
-        self.identity_api = identity.backends.ldap.Identity()
+        PROVIDERS.identity_api = identity.backends.ldap.Identity()
 
-        # TODO(shaleh): use new_user_ref()
-        user = {'name': 'fake1',
-                'password': 'fakepass1',
-                'tenants': ['bar']}
-        self.assertRaises(IOError, self.identity_api.create_user, user)
+        user = unit.new_user_ref('default')
+        self.assertRaises(IOError, PROVIDERS.identity_api.create_user, user)

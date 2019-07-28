@@ -25,10 +25,10 @@ from keystone.common import utils as common_utils
 import keystone.conf
 from keystone.credential.providers import fernet as credential_fernet
 from keystone import exception
+from keystone.server.flask import application
 from keystone.tests import unit
 from keystone.tests.unit import ksfixtures
 from keystone.tests.unit import utils
-from keystone.version import service
 
 
 CONF = keystone.conf.CONF
@@ -70,34 +70,6 @@ class UtilsTestCase(unit.BaseTestCase):
         value = u'x' * 65
         self.assertRaises(ValueError, common_utils.resource_uuid,
                           value)
-
-    def test_remove_duplicate_dicts_from_list(self):
-        dict_list = []
-        num_of_duplicate = 10
-        dup_value = {
-            'id': uuid.uuid4().hex,
-            'name': uuid.uuid4().hex,
-            'tags': ['foo', 'bar']
-        }
-        # Add in 10 unique items, and 10 of the same item
-        for i in range(num_of_duplicate):
-            new_dict = {
-                'id': i,
-                'name': uuid.uuid4().hex,
-                'tags': ['foo', i]
-            }
-            dict_list.append(new_dict)
-            dict_list.append(dup_value)
-        self.assertEqual(len(dict_list), 20)
-        result = common_utils.remove_duplicate_dicts_by_id(dict_list)
-        # Assert that 9 duplicate items have been removed
-        self.assertEqual(len(result), len(dict_list) - 9)
-        # Show that the duplicate item is only stored once
-        count = 0
-        for r in result:
-            if r['id'] == dup_value['id']:
-                count += 1
-        self.assertEqual(count, 1)
 
     def test_hash(self):
         password = 'right'
@@ -209,20 +181,6 @@ class UtilsTestCase(unit.BaseTestCase):
         self.assertFalse(common_utils.auth_str_equal('aaaaa', 'a'))
         self.assertFalse(common_utils.auth_str_equal('ABC123', 'abc123'))
 
-    def test_unixtime(self):
-        global TZ
-
-        @utils.timezone
-        def _test_unixtime():
-            epoch = common_utils.unixtime(dt)
-            self.assertEqual(epoch, epoch_ans, "TZ=%s" % TZ)
-
-        dt = datetime.datetime(1970, 1, 2, 3, 4, 56, 0)
-        epoch_ans = 56 + 4 * 60 + 3 * 3600 + 86400
-        for d in ['+0', '-11', '-8', '-5', '+5', '+8', '+14']:
-            TZ = 'UTC' + d
-            _test_unixtime()
-
     def test_url_safe_check(self):
         base_str = 'i am safe'
         self.assertFalse(common_utils.is_not_url_safe(base_str))
@@ -264,7 +222,7 @@ class UtilsTestCase(unit.BaseTestCase):
 
 class ServiceHelperTests(unit.BaseTestCase):
 
-    @service.fail_gracefully
+    @application.fail_gracefully
     def _do_test(self):
         raise Exception("Test Exc")
 

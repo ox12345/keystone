@@ -16,6 +16,7 @@ from six.moves import http_client
 from six.moves import range
 from testtools import matchers
 
+from keystone.common import provider_api
 import keystone.conf
 from keystone.credential.providers import fernet as credential_fernet
 from keystone import exception
@@ -26,6 +27,7 @@ from keystone.tests.unit import utils as test_utils
 
 
 CONF = keystone.conf.CONF
+PROVIDERS = provider_api.ProviderAPIs
 
 
 class ResourceTestCase(test_v3.RestfulTestCase,
@@ -140,6 +142,54 @@ class ResourceTestCase(test_v3.RestfulTestCase,
         self.assertValidDomainResponse(r)
         self.assertIsNotNone(r.result['domain'])
 
+    def test_create_domain_valid_explicit_id(self):
+        """Call ``POST /domains`` with a valid `explicit_domain_id` set."""
+        ref = unit.new_domain_ref()
+        explicit_domain_id = '9aea63518f0040c6b4518d8d2242911c'
+
+        ref['explicit_domain_id'] = explicit_domain_id
+        r = self.post(
+            '/domains',
+            body={'domain': ref})
+        self.assertValidDomainResponse(r, ref)
+
+        r = self.get('/domains/%(domain_id)s' % {
+            'domain_id': explicit_domain_id})
+        self.assertValidDomainResponse(r)
+        self.assertIsNotNone(r.result['domain'])
+
+    def test_create_second_domain_valid_explicit_id_fails(self):
+        """Call ``POST /domains`` with a valid `explicit_domain_id` set."""
+        ref = unit.new_domain_ref()
+        explicit_domain_id = '9aea63518f0040c6b4518d8d2242911c'
+
+        ref['explicit_domain_id'] = explicit_domain_id
+        r = self.post(
+            '/domains',
+            body={'domain': ref})
+        self.assertValidDomainResponse(r, ref)
+
+        # second one should fail
+        r = self.post(
+            '/domains',
+            body={'domain': ref},
+            expected_status=http_client.CONFLICT)
+
+    def test_create_domain_invalid_explicit_ids(self):
+        """Call ``POST /domains`` with various invalid explicit_domain_ids."""
+        ref = unit.new_domain_ref()
+
+        bad_ids = ['bad!',
+                   '',
+                   '9aea63518f0040c',
+                   '1234567890123456789012345678901234567890',
+                   '9aea63518f0040c6b4518d8d2242911c9aea63518f0040c6b45']
+
+        for explicit_domain_id in bad_ids:
+            ref['explicit_domain_id'] = explicit_domain_id
+            self.post('/domains', body={'domain': {}},
+                      expected_status=http_client.BAD_REQUEST)
+
     def test_list_head_domains(self):
         """Call ``GET & HEAD /domains``."""
         resource_url = '/domains'
@@ -147,6 +197,19 @@ class ResourceTestCase(test_v3.RestfulTestCase,
         self.assertValidDomainListResponse(r, ref=self.domain,
                                            resource_url=resource_url)
         self.head(resource_url, expected_status=http_client.OK)
+
+    def test_list_limit_for_domains(self):
+        for x in range(6):
+            domain = {'domain': unit.new_domain_ref()}
+            self.post('/domains', body=domain)
+
+        for expected_length in range(1, 6):
+            self.config_fixture.config(
+                group='resource', list_limit=expected_length
+            )
+            response = self.get('/domains')
+            domain_list = response.json_body['domains']
+            self.assertEqual(expected_length, len(domain_list))
 
     def test_get_head_domain(self):
         """Call ``GET /domains/{domain_id}``."""
@@ -225,21 +288,21 @@ class ResourceTestCase(test_v3.RestfulTestCase,
         """Call ``PATCH /domains/{domain_id}`` (set enabled=False)."""
         # Create a 2nd set of entities in a 2nd domain
         domain2 = unit.new_domain_ref()
-        self.resource_api.create_domain(domain2['id'], domain2)
+        PROVIDERS.resource_api.create_domain(domain2['id'], domain2)
 
         project2 = unit.new_project_ref(domain_id=domain2['id'])
-        self.resource_api.create_project(project2['id'], project2)
+        PROVIDERS.resource_api.create_project(project2['id'], project2)
 
-        user2 = unit.create_user(self.identity_api,
+        user2 = unit.create_user(PROVIDERS.identity_api,
                                  domain_id=domain2['id'],
                                  project_id=project2['id'])
 
         role_member = unit.new_role_ref()
-        self.role_api.create_role(role_member['id'], role_member)
+        PROVIDERS.role_api.create_role(role_member['id'], role_member)
 
-        self.assignment_api.add_role_to_user_and_project(user2['id'],
-                                                         project2['id'],
-                                                         role_member['id'])
+        PROVIDERS.assignment_api.add_role_to_user_and_project(
+            user2['id'], project2['id'], role_member['id']
+        )
 
         # First check a user in that domain can authenticate..
         auth_data = self.build_authentication_request(
@@ -300,30 +363,35 @@ class ResourceTestCase(test_v3.RestfulTestCase,
         """
         # Create a group and a credential in the main domain
         group = unit.new_group_ref(domain_id=self.domain_id)
-        group = self.identity_api.create_group(group)
+        group = PROVIDERS.identity_api.create_group(group)
 
         credential = unit.new_credential_ref(user_id=self.user['id'],
                                              project_id=self.project_id)
-        self.credential_api.create_credential(credential['id'], credential)
+        PROVIDERS.credential_api.create_credential(
+            credential['id'], credential
+        )
 
         # Create a 2nd set of entities in a 2nd domain
         domain2 = unit.new_domain_ref()
-        self.resource_api.create_domain(domain2['id'], domain2)
+        PROVIDERS.resource_api.create_domain(domain2['id'], domain2)
 
         project2 = unit.new_project_ref(domain_id=domain2['id'])
-        project2 = self.resource_api.create_project(project2['id'], project2)
+        project2 = PROVIDERS.resource_api.create_project(
+            project2['id'], project2
+        )
 
         user2 = unit.new_user_ref(domain_id=domain2['id'],
                                   project_id=project2['id'])
-        user2 = self.identity_api.create_user(user2)
+        user2 = PROVIDERS.identity_api.create_user(user2)
 
         group2 = unit.new_group_ref(domain_id=domain2['id'])
-        group2 = self.identity_api.create_group(group2)
+        group2 = PROVIDERS.identity_api.create_group(group2)
 
         credential2 = unit.new_credential_ref(user_id=user2['id'],
                                               project_id=project2['id'])
-        self.credential_api.create_credential(credential2['id'],
-                                              credential2)
+        PROVIDERS.credential_api.create_credential(
+            credential2['id'], credential2
+        )
 
         # Now disable the new domain and delete it
         domain2['enabled'] = False
@@ -335,33 +403,53 @@ class ResourceTestCase(test_v3.RestfulTestCase,
 
         # Check all the domain2 relevant entities are gone
         self.assertRaises(exception.DomainNotFound,
-                          self.resource_api.get_domain,
+                          PROVIDERS.resource_api.get_domain,
                           domain2['id'])
         self.assertRaises(exception.ProjectNotFound,
-                          self.resource_api.get_project,
+                          PROVIDERS.resource_api.get_project,
                           project2['id'])
         self.assertRaises(exception.GroupNotFound,
-                          self.identity_api.get_group,
+                          PROVIDERS.identity_api.get_group,
                           group2['id'])
         self.assertRaises(exception.UserNotFound,
-                          self.identity_api.get_user,
+                          PROVIDERS.identity_api.get_user,
                           user2['id'])
         self.assertRaises(exception.CredentialNotFound,
-                          self.credential_api.get_credential,
+                          PROVIDERS.credential_api.get_credential,
                           credential2['id'])
 
         # ...and that all self.domain entities are still here
-        r = self.resource_api.get_domain(self.domain['id'])
+        r = PROVIDERS.resource_api.get_domain(self.domain['id'])
         self.assertDictEqual(self.domain, r)
-        r = self.resource_api.get_project(self.project['id'])
+        r = PROVIDERS.resource_api.get_project(self.project['id'])
         self.assertDictEqual(self.project, r)
-        r = self.identity_api.get_group(group['id'])
+        r = PROVIDERS.identity_api.get_group(group['id'])
         self.assertDictEqual(group, r)
-        r = self.identity_api.get_user(self.user['id'])
+        r = PROVIDERS.identity_api.get_user(self.user['id'])
         self.user.pop('password')
         self.assertDictEqual(self.user, r)
-        r = self.credential_api.get_credential(credential['id'])
+        r = PROVIDERS.credential_api.get_credential(credential['id'])
         self.assertDictEqual(credential, r)
+
+    def test_delete_domain_with_idp(self):
+        # Create a new domain
+        domain_ref = unit.new_domain_ref()
+        r = self.post('/domains', body={'domain': domain_ref})
+        self.assertValidDomainResponse(r, domain_ref)
+        domain_id = r.result['domain']['id']
+        # Create a Idp in the domain
+        self.put('/OS-FEDERATION/identity_providers/test_idp',
+                 body={"identity_provider": {
+                     "domain_id": domain_id}},
+                 expected_status=http_client.CREATED)
+        # Disable and delete the domain with no error.
+        self.patch('/domains/%(domain_id)s' % {
+            'domain_id': domain_id},
+            body={'domain': {'enabled': False}})
+        self.delete('/domains/%s' % domain_id)
+        # The Idp is deleted as well
+        self.get('/OS-FEDERATION/identity_providers/test_idp',
+                 expected_status=http_client.NOT_FOUND)
 
     def test_delete_domain_deletes_is_domain_project(self):
         """Check the project that acts as a domain is deleted.
@@ -404,9 +492,9 @@ class ResourceTestCase(test_v3.RestfulTestCase,
 
         """
         domain = unit.new_domain_ref()
-        self.resource_api.create_domain(domain['id'], domain)
+        PROVIDERS.resource_api.create_domain(domain['id'], domain)
 
-        user2 = unit.create_user(self.identity_api,
+        user2 = unit.create_user(PROVIDERS.identity_api,
                                  domain_id=domain['id'])
 
         # build a request body
@@ -439,16 +527,17 @@ class ResourceTestCase(test_v3.RestfulTestCase,
     def test_delete_domain_hierarchy(self):
         """Call ``DELETE /domains/{domain_id}``."""
         domain = unit.new_domain_ref()
-        self.resource_api.create_domain(domain['id'], domain)
+        PROVIDERS.resource_api.create_domain(domain['id'], domain)
 
         root_project = unit.new_project_ref(domain_id=domain['id'])
-        root_project = self.resource_api.create_project(root_project['id'],
-                                                        root_project)
+        root_project = PROVIDERS.resource_api.create_project(
+            root_project['id'], root_project
+        )
 
         leaf_project = unit.new_project_ref(
             domain_id=domain['id'],
             parent_id=root_project['id'])
-        self.resource_api.create_project(leaf_project['id'], leaf_project)
+        PROVIDERS.resource_api.create_project(leaf_project['id'], leaf_project)
 
         # Need to disable it first.
         self.patch('/domains/%(domain_id)s' % {
@@ -460,15 +549,15 @@ class ResourceTestCase(test_v3.RestfulTestCase,
                 'domain_id': domain['id']})
 
         self.assertRaises(exception.DomainNotFound,
-                          self.resource_api.get_domain,
+                          PROVIDERS.resource_api.get_domain,
                           domain['id'])
 
         self.assertRaises(exception.ProjectNotFound,
-                          self.resource_api.get_project,
+                          PROVIDERS.resource_api.get_project,
                           root_project['id'])
 
         self.assertRaises(exception.ProjectNotFound,
-                          self.resource_api.get_project,
+                          PROVIDERS.resource_api.get_project,
                           leaf_project['id'])
 
     def test_forbid_operations_on_federated_domain(self):
@@ -488,26 +577,26 @@ class ResourceTestCase(test_v3.RestfulTestCase,
 
         for domain in create_domains():
             self.assertRaises(
-                AssertionError, self.resource_api.create_domain,
+                AssertionError, PROVIDERS.resource_api.create_domain,
                 domain['id'], domain)
             self.assertRaises(
-                AssertionError, self.resource_api.update_domain,
+                AssertionError, PROVIDERS.resource_api.update_domain,
                 domain['id'], domain)
             self.assertRaises(
-                exception.DomainNotFound, self.resource_api.delete_domain,
+                exception.DomainNotFound, PROVIDERS.resource_api.delete_domain,
                 domain['id'])
 
             # swap 'name' with 'id' and try again, expecting the request to
             # gracefully fail
             domain['id'], domain['name'] = domain['name'], domain['id']
             self.assertRaises(
-                AssertionError, self.resource_api.create_domain,
+                AssertionError, PROVIDERS.resource_api.create_domain,
                 domain['id'], domain)
             self.assertRaises(
-                AssertionError, self.resource_api.update_domain,
+                AssertionError, PROVIDERS.resource_api.update_domain,
                 domain['id'], domain)
             self.assertRaises(
-                exception.DomainNotFound, self.resource_api.delete_domain,
+                exception.DomainNotFound, PROVIDERS.resource_api.delete_domain,
                 domain['id'])
 
     def test_forbid_operations_on_defined_federated_domain(self):
@@ -521,13 +610,13 @@ class ResourceTestCase(test_v3.RestfulTestCase,
                                    federated_domain_name=non_default_name)
         domain = unit.new_domain_ref(name=non_default_name)
         self.assertRaises(AssertionError,
-                          self.resource_api.create_domain,
+                          PROVIDERS.resource_api.create_domain,
                           domain['id'], domain)
         self.assertRaises(exception.DomainNotFound,
-                          self.resource_api.delete_domain,
+                          PROVIDERS.resource_api.delete_domain,
                           domain['id'])
         self.assertRaises(AssertionError,
-                          self.resource_api.update_domain,
+                          PROVIDERS.resource_api.update_domain,
                           domain['id'], domain)
 
     # Project CRUD tests
@@ -732,10 +821,14 @@ class ResourceTestCase(test_v3.RestfulTestCase,
     def test_list_projects_filtering_by_tags_any(self):
         """Call ``GET /projects?tags-any={tags}``."""
         project, tags = self._create_project_and_tags(num_of_tags=2)
+        project1, tags1 = self._create_project_and_tags(num_of_tags=2)
+        tag_string = tags[0] + ',' + tags1[0]
         resp = self.get('/projects?tags-any=%(values)s' % {
-            'values': tags[0]})
+            'values': tag_string})
+        pids = [p['id'] for p in resp.result['projects']]
         self.assertValidProjectListResponse(resp)
-        self.assertEqual(project['id'], resp.result['projects'][0]['id'])
+        self.assertIn(project['id'], pids)
+        self.assertIn(project1['id'], pids)
 
     def test_list_projects_filtering_by_not_tags(self):
         """Call ``GET /projects?not-tags={tags}``."""
@@ -745,11 +838,9 @@ class ResourceTestCase(test_v3.RestfulTestCase,
         resp = self.get('/projects?not-tags=%(values)s' % {
             'values': tag_string})
         self.assertValidProjectListResponse(resp)
-        project_ids = []
-        for project in resp.result['projects']:
-            project_ids.append(project['id'])
-        self.assertNotIn(project1['id'], project_ids)
-        self.assertIn(project2['id'], project_ids)
+        pids = [p['id'] for p in resp.result['projects']]
+        self.assertNotIn(project1['id'], pids)
+        self.assertIn(project2['id'], pids)
 
     def test_list_projects_filtering_by_not_tags_any(self):
         """Call ``GET /projects?not-tags-any={tags}``."""
@@ -760,25 +851,30 @@ class ResourceTestCase(test_v3.RestfulTestCase,
         resp = self.get('/projects?not-tags-any=%(values)s' % {
             'values': tag_string})
         self.assertValidProjectListResponse(resp)
-        project_ids = []
-        for project in resp.result['projects']:
-            project_ids.append(project['id'])
-        self.assertNotIn(project1['id'], project_ids)
-        self.assertNotIn(project2['id'], project_ids)
-        self.assertIn(project3['id'], project_ids)
+        pids = [p['id'] for p in resp.result['projects']]
+        self.assertNotIn(project1['id'], pids)
+        self.assertNotIn(project2['id'], pids)
+        self.assertIn(project3['id'], pids)
 
     def test_list_projects_filtering_multiple_tag_filters(self):
         """Call ``GET /projects?tags={tags}&tags-any={tags}``."""
-        project1, tags1 = self._create_project_and_tags()
+        project1, tags1 = self._create_project_and_tags(num_of_tags=2)
         project2, tags2 = self._create_project_and_tags(num_of_tags=2)
+        project3, tags3 = self._create_project_and_tags(num_of_tags=2)
+        tags1_query = ','.join(tags1)
+        resp = self.patch('/projects/%(project_id)s' %
+                          {'project_id': project3['id']},
+                          body={'project': {'tags': tags1}})
+        tags1.append(tags2[0])
+        resp = self.patch('/projects/%(project_id)s' %
+                          {'project_id': project1['id']},
+                          body={'project': {'tags': tags1}})
         url = '/projects?tags=%(value1)s&tags-any=%(value2)s'
-        resp = self.get(url % {'value1': tags1[0],
-                               'value2': tags2[0]})
+        resp = self.get(url % {'value1': tags1_query,
+                               'value2': ','.join(tags2)})
         self.assertValidProjectListResponse(resp)
-        pids = [project1['id'], project2['id']]
-        self.assertEqual(len(resp.result['projects']), 2)
-        for p in resp.result['projects']:
-            self.assertIn(p['id'], pids)
+        self.assertEqual(len(resp.result['projects']), 1)
+        self.assertIn(project1['id'], resp.result['projects'][0]['id'])
 
     def test_list_projects_filtering_multiple_any_tag_filters(self):
         """Call ``GET /projects?tags-any={tags}&not-tags-any={tags}``."""
@@ -1042,6 +1138,77 @@ class ResourceTestCase(test_v3.RestfulTestCase,
                 'project_id': projects[1]['project']['id']},
             expected_status=http_client.BAD_REQUEST)
 
+    def test_get_project_with_include_limits(self):
+        PROVIDERS.assignment_api.create_system_grant_for_user(
+            self.user_id, self.role_id
+        )
+        system_admin_token = self.get_system_scoped_token()
+
+        parent, project, subproject = self._create_projects_hierarchy(2)
+        # Assign a role for the user on all the created projects
+        for proj in (parent, project, subproject):
+            self.put(self.build_role_assignment_link(
+                role_id=self.role_id, user_id=self.user_id,
+                project_id=proj['project']['id']))
+        # create a registered limit and three limits for each project.
+        reg_limit = unit.new_registered_limit_ref(service_id=self.service_id,
+                                                  region_id=self.region_id,
+                                                  resource_name='volume')
+        self.post(
+            '/registered_limits',
+            body={'registered_limits': [reg_limit]},
+            token=system_admin_token,
+            expected_status=http_client.CREATED)
+        limit1 = unit.new_limit_ref(project_id=parent['project']['id'],
+                                    service_id=self.service_id,
+                                    region_id=self.region_id,
+                                    resource_name='volume')
+        limit2 = unit.new_limit_ref(project_id=project['project']['id'],
+                                    service_id=self.service_id,
+                                    region_id=self.region_id,
+                                    resource_name='volume')
+        limit3 = unit.new_limit_ref(project_id=subproject['project']['id'],
+                                    service_id=self.service_id,
+                                    region_id=self.region_id,
+                                    resource_name='volume')
+        self.post(
+            '/limits',
+            body={'limits': [limit1, limit2, limit3]},
+            token=system_admin_token,
+            expected_status=http_client.CREATED)
+        # "include_limits" should work together with "parents_as_list" or
+        # "subtree_as_list". Only using "include_limits" really does nothing.
+        r = self.get('/projects/%(project_id)s?include_limits' %
+                     {'project_id': subproject['project']['id']})
+
+        self.assertNotIn('parents', r.result['project'])
+        self.assertNotIn('subtree', r.result['project'])
+        self.assertNotIn('limits', r.result['project'])
+
+        # using "include_limits" with "parents_as_list"
+        r = self.get('/projects/%(project_id)s?include_limits&parents_as_list'
+                     % {'project_id': subproject['project']['id']})
+
+        self.assertEqual(2, len(r.result['project']['parents']))
+        for parent in r.result['project']['parents']:
+            self.assertEqual(1, len(parent['project']['limits']))
+            self.assertEqual(parent['project']['id'],
+                             parent['project']['limits'][0]['project_id'])
+            self.assertEqual(10,
+                             parent['project']['limits'][0]['resource_limit'])
+
+        # using "include_limits" with "subtree_as_list"
+        r = self.get('/projects/%(project_id)s?include_limits&subtree_as_list'
+                     % {'project_id': parent['project']['id']})
+
+        self.assertEqual(2, len(r.result['project']['subtree']))
+        for child in r.result['project']['subtree']:
+            self.assertEqual(1, len(child['project']['limits']))
+            self.assertEqual(child['project']['id'],
+                             child['project']['limits'][0]['project_id'])
+            self.assertEqual(10,
+                             child['project']['limits'][0]['resource_limit'])
+
     def test_list_project_is_domain_filter(self):
         """Call ``GET /projects?is_domain=True/False``."""
         # Get the initial number of projects, both acting as a domain as well
@@ -1053,10 +1220,10 @@ class ResourceTestCase(test_v3.RestfulTestCase,
 
         # Add some more projects acting as domains
         new_is_domain_project = unit.new_project_ref(is_domain=True)
-        new_is_domain_project = self.resource_api.create_project(
+        new_is_domain_project = PROVIDERS.resource_api.create_project(
             new_is_domain_project['id'], new_is_domain_project)
         new_is_domain_project2 = unit.new_project_ref(is_domain=True)
-        new_is_domain_project2 = self.resource_api.create_project(
+        new_is_domain_project2 = PROVIDERS.resource_api.create_project(
             new_is_domain_project2['id'], new_is_domain_project2)
         number_is_domain_true = initial_number_is_domain_true + 2
 
@@ -1070,7 +1237,7 @@ class ResourceTestCase(test_v3.RestfulTestCase,
 
         # Now add a regular project
         new_regular_project = unit.new_project_ref(domain_id=self.domain_id)
-        new_regular_project = self.resource_api.create_project(
+        new_regular_project = PROVIDERS.resource_api.create_project(
             new_regular_project['id'], new_regular_project)
         number_is_domain_false = initial_number_is_domain_false + 1
 
@@ -1094,7 +1261,7 @@ class ResourceTestCase(test_v3.RestfulTestCase,
 
         # Make sure we have at least one project acting as a domain
         new_is_domain_project = unit.new_project_ref(is_domain=True)
-        new_is_domain_project = self.resource_api.create_project(
+        new_is_domain_project = PROVIDERS.resource_api.create_project(
             new_is_domain_project['id'], new_is_domain_project)
 
         r = self.get('/projects', expected_status=200)
@@ -1327,7 +1494,7 @@ class ResourceTestCase(test_v3.RestfulTestCase,
         update the `domain_id` of a project fails.
         """
         project = unit.new_project_ref(domain_id=self.domain['id'])
-        project = self.resource_api.create_project(project['id'], project)
+        project = PROVIDERS.resource_api.create_project(project['id'], project)
         project['domain_id'] = CONF.identity.default_domain_id
         self.patch('/projects/%(project_id)s' % {
             'project_id': project['id']},
@@ -1395,17 +1562,21 @@ class ResourceTestCase(test_v3.RestfulTestCase,
         """
         credential = unit.new_credential_ref(user_id=self.user['id'],
                                              project_id=self.project_id)
-        self.credential_api.create_credential(credential['id'], credential)
+        PROVIDERS.credential_api.create_credential(
+            credential['id'], credential
+        )
 
         # First check the credential for this project is present
-        r = self.credential_api.get_credential(credential['id'])
+        r = PROVIDERS.credential_api.get_credential(credential['id'])
         self.assertDictEqual(credential, r)
         # Create a second credential with a different project
         project2 = unit.new_project_ref(domain_id=self.domain['id'])
-        self.resource_api.create_project(project2['id'], project2)
+        PROVIDERS.resource_api.create_project(project2['id'], project2)
         credential2 = unit.new_credential_ref(user_id=self.user['id'],
                                               project_id=project2['id'])
-        self.credential_api.create_credential(credential2['id'], credential2)
+        PROVIDERS.credential_api.create_credential(
+            credential2['id'], credential2
+        )
 
         # Now delete the project
         self.delete(
@@ -1415,10 +1586,10 @@ class ResourceTestCase(test_v3.RestfulTestCase,
         # Deleting the project should have deleted any credentials
         # that reference this project
         self.assertRaises(exception.CredentialNotFound,
-                          self.credential_api.get_credential,
+                          PROVIDERS.credential_api.get_credential,
                           credential_id=credential['id'])
         # But the credential for project2 is unaffected
-        r = self.credential_api.get_credential(credential2['id'])
+        r = PROVIDERS.credential_api.get_credential(credential2['id'])
         self.assertDictEqual(credential2, r)
 
     def test_delete_not_leaf_project(self):
@@ -1650,3 +1821,64 @@ class ResourceTestCase(test_v3.RestfulTestCase,
             '/projects/%(project_id)s/tags' % {'project_id': project['id']},
             body={'tags': tags},
             expected_status=http_client.BAD_REQUEST)
+
+    def test_list_projects_by_user_with_inherited_role(self):
+        """Ensure the cache is invalidated when creating/deleting a project."""
+        domain_ref = unit.new_domain_ref()
+        resp = self.post('/domains', body={'domain': domain_ref})
+        domain = resp.result['domain']
+
+        user_ref = unit.new_user_ref(domain_id=self.domain_id)
+        resp = self.post('/users', body={'user': user_ref})
+        user = resp.result['user']
+
+        role_ref = unit.new_role_ref()
+        resp = self.post('/roles', body={'role': role_ref})
+        role = resp.result['role']
+
+        self.put('/OS-INHERIT/domains/%(domain_id)s/users/%(user_id)s/roles/'
+                 '%(role_id)s/inherited_to_projects' % {
+                     'domain_id': domain['id'],
+                     'user_id': user['id'],
+                     'role_id': role['id']})
+
+        resp = self.get('/users/%(user)s/projects' % {'user': user['id']})
+        self.assertValidProjectListResponse(resp)
+        self.assertEqual([], resp.result['projects'])
+
+        project_ref = unit.new_project_ref(domain_id=domain['id'])
+        resp = self.post('/projects', body={'project': project_ref})
+        project = resp.result['project']
+
+        resp = self.get('/users/%(user)s/projects' % {'user': user['id']})
+        self.assertValidProjectListResponse(resp)
+        self.assertEqual(project['id'], resp.result['projects'][0]['id'])
+
+
+class StrictTwoLevelLimitsResourceTestCase(ResourceTestCase):
+    def setUp(self):
+        super(StrictTwoLevelLimitsResourceTestCase, self).setUp()
+
+    def config_overrides(self):
+        super(StrictTwoLevelLimitsResourceTestCase, self).config_overrides()
+        self.config_fixture.config(group='unified_limit',
+                                   enforcement_model='strict_two_level')
+
+    def _create_projects_hierarchy(self, hierarchy_size=1):
+        if hierarchy_size > 1:
+            self.skip_test_overrides(
+                "Strict two level limit enforcement model doesn't allow the"
+                "project tree depth > 2")
+        return super(StrictTwoLevelLimitsResourceTestCase,
+                     self)._create_projects_hierarchy(hierarchy_size)
+
+    def test_create_hierarchical_project(self):
+        projects = self._create_projects_hierarchy()
+
+        # create grandchild project will fail.
+        new_ref = unit.new_project_ref(
+            domain_id=self.domain_id,
+            parent_id=projects[1]['project']['id'])
+        self.post('/projects',
+                  body={'project': new_ref},
+                  expected_status=http_client.FORBIDDEN)

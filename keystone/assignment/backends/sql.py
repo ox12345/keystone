@@ -42,7 +42,8 @@ class AssignmentType(object):
 
 class Assignment(base.AssignmentDriverBase):
 
-    def default_role_driver(self):
+    @classmethod
+    def default_role_driver(cls):
         return 'sql'
 
     def create_grant(self, role_id, user_id=None, group_id=None,
@@ -112,23 +113,23 @@ class Assignment(base.AssignmentDriverBase):
                                                        actor_id=actor_id,
                                                        target_id=target_id)
 
-    def add_role_to_user_and_project(self, user_id, tenant_id, role_id):
+    def add_role_to_user_and_project(self, user_id, project_id, role_id):
         try:
             with sql.session_for_write() as session:
                 session.add(RoleAssignment(
                     type=AssignmentType.USER_PROJECT,
-                    actor_id=user_id, target_id=tenant_id,
+                    actor_id=user_id, target_id=project_id,
                     role_id=role_id, inherited=False))
         except sql.DBDuplicateEntry:
             msg = ('User %s already has role %s in tenant %s'
-                   % (user_id, role_id, tenant_id))
+                   % (user_id, role_id, project_id))
             raise exception.Conflict(type='role grant', details=msg)
 
-    def remove_role_from_user_and_project(self, user_id, tenant_id, role_id):
+    def remove_role_from_user_and_project(self, user_id, project_id, role_id):
         with sql.session_for_write() as session:
             q = session.query(RoleAssignment)
             q = q.filter_by(actor_id=user_id)
-            q = q.filter_by(target_id=tenant_id)
+            q = q.filter_by(target_id=project_id)
             q = q.filter_by(role_id=role_id)
             if q.delete() == 0:
                 raise exception.RoleNotFound(message=_(
@@ -287,6 +288,68 @@ class Assignment(base.AssignmentDriverBase):
             )
             q.delete(False)
 
+    def create_system_grant(self, role_id, actor_id, target_id,
+                            assignment_type, inherited):
+        try:
+            with sql.session_for_write() as session:
+                session.add(
+                    SystemRoleAssignment(
+                        type=assignment_type,
+                        actor_id=actor_id,
+                        target_id=target_id,
+                        role_id=role_id,
+                        inherited=inherited
+                    )
+                )
+        except sql.DBDuplicateEntry:  # nosec : The v3 grant APIs are silent if
+            # the assignment already exists
+            pass
+
+    def list_system_grants(self, actor_id, target_id, assignment_type):
+        with sql.session_for_read() as session:
+            query = session.query(SystemRoleAssignment)
+            if actor_id:
+                query = query.filter_by(actor_id=actor_id)
+            if target_id:
+                query = query.filter_by(target_id=target_id)
+            if assignment_type:
+                query = query.filter_by(type=assignment_type)
+            results = query.all()
+
+        return [role.to_dict() for role in results]
+
+    def list_system_grants_by_role(self, role_id):
+        with sql.session_for_read() as session:
+            query = session.query(SystemRoleAssignment)
+            query = query.filter_by(role_id=role_id)
+            return query.all()
+
+    def check_system_grant(self, role_id, actor_id, target_id, inherited):
+        with sql.session_for_read() as session:
+            try:
+                q = session.query(SystemRoleAssignment)
+                q = q.filter_by(actor_id=actor_id)
+                q = q.filter_by(target_id=target_id)
+                q = q.filter_by(role_id=role_id)
+                q = q.filter_by(inherited=inherited)
+                q.one()
+            except sql.NotFound:
+                raise exception.RoleAssignmentNotFound(
+                    role_id=role_id, actor_id=actor_id, target_id=target_id
+                )
+
+    def delete_system_grant(self, role_id, actor_id, target_id, inherited):
+        with sql.session_for_write() as session:
+            q = session.query(SystemRoleAssignment)
+            q = q.filter_by(actor_id=actor_id)
+            q = q.filter_by(target_id=target_id)
+            q = q.filter_by(role_id=role_id)
+            q = q.filter_by(inherited=inherited)
+            if not q.delete(False):
+                raise exception.RoleAssignmentNotFound(
+                    role_id=role_id, actor_id=actor_id, target_id=target_id
+                )
+
 
 class RoleAssignment(sql.ModelBase, sql.ModelDictMixin):
     __tablename__ = 'assignment'
@@ -305,6 +368,29 @@ class RoleAssignment(sql.ModelBase, sql.ModelDictMixin):
         sql.PrimaryKeyConstraint('type', 'actor_id', 'target_id', 'role_id',
                                  'inherited'),
         sql.Index('ix_actor_id', 'actor_id'),
+    )
+
+    def to_dict(self):
+        """Override parent method with a simpler implementation.
+
+        RoleAssignment doesn't have non-indexed 'extra' attributes, so the
+        parent implementation is not applicable.
+        """
+        return dict(self.items())
+
+
+class SystemRoleAssignment(sql.ModelBase, sql.ModelDictMixin):
+    __tablename__ = 'system_assignment'
+    attributes = ['type', 'actor_id', 'target_id', 'role_id', 'inherited']
+    type = sql.Column(sql.String(64), nullable=False)
+    actor_id = sql.Column(sql.String(64), nullable=False)
+    target_id = sql.Column(sql.String(64), nullable=False)
+    role_id = sql.Column(sql.String(64), nullable=False)
+    inherited = sql.Column(sql.Boolean, default=False, nullable=False)
+    __table_args__ = (
+        sql.PrimaryKeyConstraint('type', 'actor_id', 'target_id', 'role_id',
+                                 'inherited'),
+        sql.Index('ix_system_actor_id', 'actor_id'),
     )
 
     def to_dict(self):

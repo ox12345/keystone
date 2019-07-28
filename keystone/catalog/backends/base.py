@@ -16,6 +16,7 @@ import abc
 
 import six
 
+from keystone.common import provider_api
 import keystone.conf
 from keystone import exception
 
@@ -24,7 +25,7 @@ CONF = keystone.conf.CONF
 
 
 @six.add_metaclass(abc.ABCMeta)
-class CatalogDriverBase(object):
+class CatalogDriverBase(provider_api.ProviderAPIMixin, object):
     """Interface description for the Catalog driver."""
 
     def _get_list_limit(self):
@@ -239,8 +240,6 @@ class CatalogDriverBase(object):
     def get_v3_catalog(self, user_id, project_id):
         """Retrieve and format the current V3 service catalog.
 
-        The default implementation builds the V3 catalog from the V2 catalog.
-
         Example::
 
             [
@@ -266,38 +265,7 @@ class CatalogDriverBase(object):
         :raises keystone.exception.NotFound: If the endpoint doesn't exist.
 
         """
-        v2_catalog = self.get_catalog(user_id, project_id)
-        v3_catalog = []
-
-        for region_name, region in v2_catalog.items():
-            for service_type, service in region.items():
-                service_v3 = {
-                    'type': service_type,
-                    'endpoints': []
-                }
-
-                for attr, value in service.items():
-                    # Attributes that end in URL are interfaces. In the V2
-                    # catalog, these are internalURL, publicURL, and adminURL.
-                    # For example, <region_name>.publicURL=<URL> in the V2
-                    # catalog becomes the V3 interface for the service:
-                    # { 'interface': 'public', 'url': '<URL>', 'region':
-                    #   'region: '<region_name>' }
-                    if attr.endswith('URL'):
-                        v3_interface = attr[:-len('URL')]
-                        service_v3['endpoints'].append({
-                            'interface': v3_interface,
-                            'region': region_name,
-                            'url': value,
-                        })
-                        continue
-
-                    # Other attributes are copied to the service.
-                    service_v3[attr] = value
-
-                v3_catalog.append(service_v3)
-
-        return v3_catalog
+        raise exception.NotImplemented()  # pragma: no cover
 
     @abc.abstractmethod
     def add_endpoint_to_project(self, endpoint_id, project_id):
@@ -473,7 +441,7 @@ class CatalogDriverBase(object):
         raise exception.NotImplemented()  # pragma: no cover
 
     @abc.abstractmethod
-    def list_endpoint_groups(self):
+    def list_endpoint_groups(self, hints):
         """List all endpoint groups.
 
         :returns: None.

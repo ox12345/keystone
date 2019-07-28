@@ -22,13 +22,86 @@ API Examples using Curl
 v3 API Examples Using Curl
 --------------------------
 
+.. note::
+
+   Following are some API examples using curl. Note that these examples are not
+   automatically generated. They can be outdated as things change and are subject
+   to regular updates and changes.
+
+
+GET /
+=====
+
+Discover API version information, links to documentation (PDF, HTML, WADL),
+and supported media types:
+
+.. WARNING::
+
+    The v2.0 portion of this response will be removed in the T release. It is
+    only advertised here because the v2.0 API supports the ec2tokens API until
+    the T release. All other functionality of the v2.0 has been removed as of
+    the Queens release. Use v3 for all functionality as it is more complete and
+    secure.
+
+.. code-block:: bash
+
+    $ curl "http://localhost:5000"
+
+.. code-block:: javascript
+
+    {
+        "versions": {
+            "values": [
+                {
+                    "id": "v3.10",
+                    "links": [
+                        {
+                            "href": "http://127.0.0.1:5000/v3/",
+                            "rel": "self"
+                        }
+                    ],
+                    "media-types": [
+                        {
+                            "base": "application/json",
+                            "type": "application/vnd.openstack.identity-v3+json"
+                        }
+                    ],
+                    "status": "stable",
+                    "updated": "2018-02-28T00:00:00Z"
+                },
+                {
+                    "id": "v2.0",
+                    "links": [
+                        {
+                            "href": "http://127.0.0.1:5000/v2.0/",
+                            "rel": "self"
+                        },
+                        {
+                            "href": "https://docs.openstack.org/",
+                            "rel": "describedby",
+                            "type": "text/html"
+                        }
+                    ],
+                    "media-types": [
+                        {
+                            "base": "application/json",
+                            "type": "application/vnd.openstack.identity-v2.0+json"
+                        }
+                    ],
+                    "status": "deprecated",
+                    "updated": "2016-08-04T00:00:00Z"
+                }
+            ]
+        }
+    }
+
 Tokens
 ======
 
-Default scope
--------------
+Unscoped
+--------
 
-Get a token with default scope (may be unscoped):
+Get an unscoped token:
 
 .. code-block:: bash
 
@@ -58,60 +131,28 @@ Example response:
   X-Subject-Token: MIIFvgY...
   Vary: X-Auth-Token
   Content-Type: application/json
-  Content-Length: 1025
-  Date: Tue, 10 Jun 2014 20:55:16 GMT
+  Content-Length: 312
+  Date: Fri, 11 May 2018 03:15:01 GMT
 
   {
     "token": {
-      "methods": ["password"],
-      "roles": [{
-        "id": "9fe2ff9ee4384b1894a90878d3e92bab",
-        "name": "_member_"
-      }, {
-        "id": "c703057be878458588961ce9a0ce686b",
-        "name": "admin"
-      }],
-      "expires_at": "2014-06-10T2:55:16.806001Z",
-      "project": {
-        "domain": {
-          "id": "default",
-          "name": "Default"
-        },
-        "id": "8538a3f13f9541b28c2620eb19065e45",
-        "name": "admin"
-      },
-      "catalog": [{
-        "endpoints": [{
-          "url": "http://localhost:3537/v2.0",
-          "region": "RegionOne",
-          "interface": "admin",
-          "id": "29beb2f1567642eb810b042b6719ea88"
-        }, {
-          "url": "http://localhost:5000/v2.0",
-          "region": "RegionOne",
-          "interface": "internal",
-          "id": "8707e3735d4415c97ae231b4841eb1c"
-        }, {
-          "url": "http://localhost:5000/v2.0",
-          "region": "RegionOne",
-          "interface": "public",
-          "id": "ef303187fc8d41668f25199c298396a5"
-        }],
-        "type": "identity",
-        "id": "bd73972c0e14fb69bae8ff76e112a90",
-        "name": "keystone"
-      }],
-      "extras": {},
-      "user": {
-        "domain": {
-          "id": "default",
-          "name": "Default"
-        },
-        "id": "3ec3164f750146be97f21559ee4d9c51",
-        "name": "admin"
-      },
-      "audit_ids": ["yRt0UrxJSs6-WYJgwEMMmg"],
-      "issued_at": "201406-10T20:55:16.806027Z"
+        "issued_at": "2018-05-11T03:15:01.000000Z",
+        "audit_ids": [
+            "0PKh_BDKTWqqaFONE-Sxbg"
+        ],
+        "methods": [
+            "password"
+        ],
+        "expires_at": "2018-05-11T04:15:01.000000Z",
+        "user": {
+            "password_expires_at": null,
+            "domain": {
+                "id": "default",
+                "name": "Default"
+            },
+            "id": "9a7e43333cc44ef4b988f05fc3d3a49d",
+            "name": "admin"
+        }
     }
   }
 
@@ -139,7 +180,7 @@ Get a project-scoped token:
         },
         "scope": {
           "project": {
-            "name": "demo",
+            "name": "admin",
             "domain": { "id": "default" }
           }
         }
@@ -155,57 +196,203 @@ Example response:
   X-Subject-Token: MIIFfQ...
   Vary: X-Auth-Token
   Content-Type: application/json
-  Content-Length: 960
-  Date: Tue, 10 Jun 2014 20:40:14 GMT
+  Content-Length: 3518
+  Date: Fri, 11 May 2018 03:38:39 GMT
 
   {
     "token": {
-      "audit_ids": ["ECwrVNWbSCqmEgPnu0YCRw"],
-      "methods": ["password"],
-      "roles": [{
-        "id": "c703057be878458588961ce9a0ce686b",
-        "name": "admin"
-      }],
-      "expires_at": "2014-06-10T21:40:14.360795Z",
-      "project": {
-        "domain": {
-          "id": "default",
-          "name": "Default"
+        "is_domain": false,
+        "methods": [
+            "password"
+        ],
+        "roles": [
+            {
+                "id": "b57680c826b44b5ca6122d0f792c3184",
+                "name": "Member"
+            },
+            {
+                "id": "3a7bd258345f47479a26aea11a6cc2bb",
+                "name": "admin"
+            }
+        ],
+        "expires_at": "2018-05-11T04:38:39.000000Z",
+        "project": {
+            "domain": {
+                "id": "default",
+                "name": "Default"
+            },
+            "id": "3a705b9f56bb439381b43c4fe59dccce",
+            "name": "admin"
         },
-        "id": "3d4c2c82bd5948f0bcab0cf3a7c9b48c",
-        "name": "demo"
-      },
-      "catalog": [{
-        "endpoints": [{
-          "url": "http://localhost:35357/v2.0",
-          "region": "RegionOne",
-          "interface": "admin",
-          "id": "29beb2f1567642eb810b042b6719ea88"
-        }, {
-          "url": "http://localhost:5000/v2.0",
-          "region": "RegionOne",
-          "interface": "internal",
-          "id": "87057e3735d4415c97ae231b4841eb1c"
-        }, {
-          "url": "http://localhost:5000/v2.0",
-          "region": "RegionOne",
-          "interface": "public",
-          "id": "ef303187fc8d41668f25199c298396a5"
-        }],
-        "type": "identity",
-        "id": "bd7397d2c0e14fb69bae8ff76e112a90",
-        "name": "keystone"
-      }],
-      "extras": {},
-      "user": {
-        "domain": {
-          "id": "default",
-          "name": "Default"
+        "catalog": [
+            {
+                "endpoints": [
+                    {
+                        "url": "http://localhost/identity",
+                        "interface": "public",
+                        "region": "RegionOne",
+                        "region_id": "RegionOne",
+                        "id": "30a91932e4e94a8ca4dc145bb1bb6b4b"
+                    },
+                    {
+                        "url": "http://localhost/identity",
+                        "interface": "admin",
+                        "region": "RegionOne",
+                        "region_id": "RegionOne",
+                        "id": "94d4768735104c9091f0468e7d31c189"
+                    }
+                ],
+                "type": "identity",
+                "id": "09af9253500b41ef976a07322b2fa388",
+                "name": "keystone"
+            },
+            {
+                "endpoints": [
+                    {
+                        "url": "http://localhost/volume/v2/3a705b9f56bb439381b43c4fe59dccce",
+                        "interface": "public",
+                        "region": "RegionOne",
+                        "region_id": "RegionOne",
+                        "id": "1c4ffe935e7643d99b55938cb12bc38d"
+                    }
+                ],
+                "type": "volumev2",
+                "id": "413a44234e1a4c3781d4a3c7a7e4c895",
+                "name": "cinderv2"
+            },
+            {
+                "endpoints": [
+                    {
+                        "url": "http://localhost/image",
+                        "interface": "public",
+                        "region": "RegionOne",
+                        "region_id": "RegionOne",
+                        "id": "33237fdd1a744d0fb40f9127f21ddad4"
+                    }
+                ],
+                "type": "image",
+                "id": "4d473252145546d2aa589605f1e177c7",
+                "name": "glance"
+            },
+            {
+                "endpoints": [
+                    {
+                        "url": "http://localhost/placement",
+                        "interface": "public",
+                        "region": "RegionOne",
+                        "region_id": "RegionOne",
+                        "id": "1a421e2f97684d3f86ab4d2cc9c86362"
+                    }
+                ],
+                "type": "placement",
+                "id": "5dcecbdd4a1d44d0855c560301b27bb5",
+                "name": "placement"
+            },
+            {
+                "endpoints": [
+                    {
+                        "url": "http://localhost/compute/v2.1",
+                        "interface": "public",
+                        "region": "RegionOne",
+                        "region_id": "RegionOne",
+                        "id": "8e7ea663cc41477c9629cc710bbb1c7d"
+                    }
+                ],
+                "type": "compute",
+                "id": "87d49efa8fb64006bdb123d223ddcae2",
+                "name": "nova"
+            },
+            {
+                "endpoints": [
+                    {
+                        "url": "http://localhost/volume/v1/3a705b9f56bb439381b43c4fe59dccce",
+                        "interface": "public",
+                        "region": "RegionOne",
+                        "region_id": "RegionOne",
+                        "id": "97a2c0ac7e304316a1eb58a3757e6ef8"
+                    }
+                ],
+                "type": "volume",
+                "id": "9408080f1970482aa0e38bc2d4ea34b7",
+                "name": "cinder"
+            },
+            {
+                "endpoints": [
+                    {
+                        "url": "http://localhost:8080/v1/AUTH_3a705b9f56bb439381b43c4fe59dccce",
+                        "interface": "public",
+                        "region": "RegionOne",
+                        "region_id": "RegionOne",
+                        "id": "d0d823615b0747a9aeca8b83fba105f0"
+                    },
+                    {
+                        "url": "http://localhost:8080",
+                        "interface": "admin",
+                        "region": "RegionOne",
+                        "region_id": "RegionOne",
+                        "id": "e4cb86d9232349f091e0a02390deeb79"
+                    }
+                ],
+                "type": "object-store",
+                "id": "957ba1fe8b0443f0afe64bfd0858ba5e",
+                "name": "swift"
+            },
+            {
+                "endpoints": [
+                    {
+                        "url": "http://localhost:9696/",
+                        "interface": "public",
+                        "region": "RegionOne",
+                        "region_id": "RegionOne",
+                        "id": "aa4a0e61cdc54372967ee9e2298f1d53"
+                    }
+                ],
+                "type": "network",
+                "id": "960fbc66bfcb4fa7900023f647fdc3a5",
+                "name": "neutron"
+            },
+            {
+                "endpoints": [
+                    {
+                        "url": "http://localhost/volume/v3/3a705b9f56bb439381b43c4fe59dccce",
+                        "interface": "public",
+                        "region": "RegionOne",
+                        "region_id": "RegionOne",
+                        "id": "0c38045a91c34d798e0d2008fee7521d"
+                    }
+                ],
+                "type": "volumev3",
+                "id": "98adb083914f423d9cb74ad5527e37cb",
+                "name": "cinderv3"
+            },
+            {
+                "endpoints": [
+                    {
+                        "url": "http://localhost/compute/v2/3a705b9f56bb439381b43c4fe59dccce",
+                        "interface": "public",
+                        "region": "RegionOne",
+                        "region_id": "RegionOne",
+                        "id": "562e12b9ee9549e8b857218ccf2ae321"
+                    }
+                ],
+                "type": "compute_legacy",
+                "id": "a31e688016614430b28cddddf12d7b88",
+                "name": "nova_legacy"
+            }
+        ],
+        "user": {
+            "password_expires_at": null,
+            "domain": {
+                "id": "default",
+                "name": "Default"
+            },
+            "id": "9a7e43333cc44ef4b988f05fc3d3a49d",
+            "name": "admin"
         },
-        "id": "3ec3164f750146be97f21559ee4d9c51",
-        "name": "admin"
-      },
-      "issued_at": "2014-06-10T20:40:14.360822Z"
+        "audit_ids": [
+            "TbdrnW4MQDq_GPAVN9-JOQ"
+        ],
+        "issued_at": "2018-05-11T03:38:39.000000Z"
     }
   }
 
@@ -249,53 +436,159 @@ Example response:
   X-Subject-Token: MIIFNg...
   Vary: X-Auth-Token
   Content-Type: application/json
-  Content-Length: 889
-  Date: Tue, 10 Jun 2014 20:52:59 GMT
+  Content-Length: 2590
+  Date: Fri, 11 May 2018 03:37:09 GMT
 
   {
     "token": {
-      "domain": {
-        "id": "default",
-        "name": "Default"
-      },
-      "methods": ["password"],
-      "roles": [{
-        "id": "c703057be878458588961ce9a0ce686b",
-        "name": "admin"
-      }],
-      "expires_at": "2014-06-10T21:52:58.852167Z",
-      "catalog": [{
-        "endpoints": [{
-          "url": "http://localhost:35357/v2.0",
-          "region": "RegionOne",
-          "interface": "admin",
-          "id": "29beb2f1567642eb810b042b6719ea88"
-        }, {
-          "url": "http://localhost:5000/v2.0",
-          "region": "RegionOne",
-          "interface": "internal",
-          "id": "87057e3735d4415c97ae231b4841eb1c"
-        }, {
-          "url": "http://localhost:5000/v2.0",
-          "region": "RegionOne",
-          "interface": "public",
-          "id": "ef303187fc8d41668f25199c298396a5"
-        }],
-        "type": "identity",
-        "id": "bd7397d2c0e14fb69bae8ff76e112a90",
-        "name": "keystone"
-      }],
-      "extras": {},
-      "user": {
         "domain": {
-          "id": "default",
-          "name": "Default"
+            "id": "default",
+            "name": "Default"
         },
-        "id": "3ec3164f750146be97f21559ee4d9c51",
-        "name": "admin"
-      },
-      "audit_ids": ["Xpa6Uyn-T9S6mTREudUH3w"],
-      "issued_at": "2014-06-10T20:52:58.852194Z"
+        "methods": [
+            "password"
+        ],
+        "roles": [
+            {
+                "id": "b57680c826b44b5ca6122d0f792c3184",
+                "name": "Member"
+            },
+            {
+                "id": "3a7bd258345f47479a26aea11a6cc2bb",
+                "name": "admin"
+            }
+        ],
+        "expires_at": "2018-05-11T04:37:09.000000Z",
+        "catalog": [
+            {
+                "endpoints": [
+                    {
+                        "region_id": "RegionOne",
+                        "url": "http://localhost/identity",
+                        "region": "RegionOne",
+                        "interface": "public",
+                        "id": "30a91932e4e94a8ca4dc145bb1bb6b4b"
+                    },
+                    {
+                        "region_id": "RegionOne",
+                        "url": "http://localhost/identity",
+                        "region": "RegionOne",
+                        "interface": "admin",
+                        "id": "94d4768735104c9091f0468e7d31c189"
+                    }
+                ],
+                "type": "identity",
+                "id": "09af9253500b41ef976a07322b2fa388",
+                "name": "keystone"
+            },
+            {
+                "endpoints": [],
+                "type": "volumev2",
+                "id": "413a44234e1a4c3781d4a3c7a7e4c895",
+                "name": "cinderv2"
+            },
+            {
+                "endpoints": [
+                    {
+                        "region_id": "RegionOne",
+                        "url": "http://localhost/image",
+                        "region": "RegionOne",
+                        "interface": "public",
+                        "id": "33237fdd1a744d0fb40f9127f21ddad4"
+                    }
+                ],
+                "type": "image",
+                "id": "4d473252145546d2aa589605f1e177c7",
+                "name": "glance"
+            },
+            {
+                "endpoints": [
+                    {
+                        "region_id": "RegionOne",
+                        "url": "http://localhost/placement",
+                        "region": "RegionOne",
+                        "interface": "public",
+                        "id": "1a421e2f97684d3f86ab4d2cc9c86362"
+                    }
+                ],
+                "type": "placement",
+                "id": "5dcecbdd4a1d44d0855c560301b27bb5",
+                "name": "placement"
+            },
+            {
+                "endpoints": [
+                    {
+                        "region_id": "RegionOne",
+                        "url": "http://localhost/compute/v2.1",
+                        "region": "RegionOne",
+                        "interface": "public",
+                        "id": "8e7ea663cc41477c9629cc710bbb1c7d"
+                    }
+                ],
+                "type": "compute",
+                "id": "87d49efa8fb64006bdb123d223ddcae2",
+                "name": "nova"
+            },
+            {
+                "endpoints": [],
+                "type": "volume",
+                "id": "9408080f1970482aa0e38bc2d4ea34b7",
+                "name": "cinder"
+            },
+            {
+                "endpoints": [
+                    {
+                        "region_id": "RegionOne",
+                        "url": "http://localhost:8080",
+                        "region": "RegionOne",
+                        "interface": "admin",
+                        "id": "e4cb86d9232349f091e0a02390deeb79"
+                    }
+                ],
+                "type": "object-store",
+                "id": "957ba1fe8b0443f0afe64bfd0858ba5e",
+                "name": "swift"
+            },
+            {
+                "endpoints": [
+                    {
+                        "region_id": "RegionOne",
+                        "url": "http://localhost:9696/",
+                        "region": "RegionOne",
+                        "interface": "public",
+                        "id": "aa4a0e61cdc54372967ee9e2298f1d53"
+                    }
+                ],
+                "type": "network",
+                "id": "960fbc66bfcb4fa7900023f647fdc3a5",
+                "name": "neutron"
+            },
+            {
+                "endpoints": [],
+                "type": "volumev3",
+                "id": "98adb083914f423d9cb74ad5527e37cb",
+                "name": "cinderv3"
+            },
+            {
+                "endpoints": [],
+                "type": "compute_legacy",
+                "id": "a31e688016614430b28cddddf12d7b88",
+                "name": "nova_legacy"
+            }
+        ],
+        "user": {
+            "password_expires_at": null,
+            "domain": {
+                "id": "default",
+                "name": "Default"
+            },
+            "id": "9a7e43333cc44ef4b988f05fc3d3a49d",
+            "name": "admin"
+        },
+        "audit_ids": [
+            "Sfc8_kywQx-tWNkEVqA1Iw"
+        ],
+        "issued_at": "2018-05-11T03:37:09.000000Z"
     }
   }
 
@@ -330,26 +623,30 @@ Example response:
   X-Subject-Token: MIIFxw...
   Vary: X-Auth-Token
   Content-Type: application/json
-  Content-Length: 1034
-  Date: Tue, 10 Jun 2014 21:00:05 GMT
+  Content-Length: 347
+  Date: Fri, 11 May 2018 03:41:29 GMT
 
   {
     "token": {
-      "methods": ["token", "password"],
-      "expires_at": "2015-05-28T07:43:44.808209Z",
-      "extras": {},
-      "user": {
-        "domain": {
-          "id": "default",
-          "name": "Default"
-        },
-        "id": "753867c25c3340ffad1abc22d488c31a",
-        "name": "admin"
-      },
-      "audit_ids": ["ZE0OPSuzTmCXHo0eIOYltw",
-        "xxIQCkHOQOywL0oY6CTppQ"
-      ],
-      "issued_at": "2015-05-28T07:19:23.763532Z"
+        "issued_at": "2018-05-11T03:41:29.000000Z",
+        "audit_ids": [
+            "zS_C_KROTFeZm-VlG1LjbA",
+            "RAjE82q8Rz-Cd50ogCpx3Q"
+        ],
+        "methods": [
+            "token",
+            "password"
+        ],
+        "expires_at": "2018-05-11T04:40:00.000000Z",
+        "user": {
+            "password_expires_at": null,
+            "domain": {
+                "id": "default",
+                "name": "Default"
+            },
+            "id": "9a7e43333cc44ef4b988f05fc3d3a49d",
+            "name": "admin"
+        }
     }
   }
 
@@ -580,7 +877,7 @@ Example response:
                 },
                 "region": "RegionOne",
                 "service_id": "bd7397d2c0e14fb69bae8ff76e112a90",
-                "url": "http://localhost:35357/v2.0"
+                "url": "http://localhost:5000/v3"
             }
         ],
         "links": {
@@ -791,543 +1088,4 @@ Example response:
             "trustee_user_id": "269348fdd9374b8885da1418e0730af1",
             "trustor_user_id": "3ec3164f750146be97f21559ee4d9c51"
         }
-    }
-
-
--------------------------------
-Service API Examples Using Curl
--------------------------------
-
-The service API is defined to be a subset of the Admin API and, by
-default, runs on port 5000.
-
-GET /
-=====
-
-This call is identical to that documented for the Admin API, except
-that it uses port 5000, instead of port 35357, by default:
-
-.. code-block:: bash
-
-    $ curl "http://0.0.0.0:5000"
-
-or:
-
-.. code-block:: bash
-
-    $ curl "http://0.0.0.0:5000/v2.0/"
-
-See the `Admin API Examples Using Curl`_ for more info.
-
-GET /extensions
-===============
-
-This call is identical to that documented for the Admin API.
-
-POST /tokens
-============
-
-This call is identical to that documented for the Admin API.
-
-GET /tenants
-============
-
-List all of the tenants your token can access:
-
-.. code-block:: bash
-
-    $ curl -H "X-Auth-Token:887665443383838" \
-       "http://localhost:5000/v2.0/tenants"
-
-Returns:
-
-.. code-block:: javascript
-
-    {
-        "tenants_links": [],
-        "tenants": [
-            {
-                "enabled": true,
-                "description": "None",
-                "name": "customer-x",
-                "id": "1"
-            }
-        ]
-    }
-
------------------------------
-Admin API Examples Using Curl
------------------------------
-
-These examples assume a default port value of 35357, and depend on the
-``sampledata`` bundled with keystone.
-
-GET /
-=====
-
-Discover API version information, links to documentation (PDF, HTML, WADL),
-and supported media types:
-
-.. code-block:: bash
-
-    $ curl "http://0.0.0.0:35357"
-
-.. code-block:: javascript
-
-    {
-        "versions": {
-            "values": [
-                {
-                    "id": "v3.4",
-                    "links": [
-                        {
-                            "href": "http://127.0.0.1:35357/v3/",
-                            "rel": "self"
-                        }
-                    ],
-                    "media-types": [
-                        {
-                            "base": "application/json",
-                            "type": "application/vnd.openstack.identity-v3+json"
-                        }
-                    ],
-                    "status": "stable",
-                    "updated": "2015-03-30T00:00:00Z"
-                },
-                {
-                    "id": "v2.0",
-                    "links": [
-                        {
-                            "href": "http://127.0.0.1:35357/v2.0/",
-                            "rel": "self"
-                        },
-                        {
-                            "href": "https://docs.openstack.org/",
-                            "rel": "describedby",
-                            "type": "text/html"
-                        }
-                    ],
-                    "media-types": [
-                        {
-                            "base": "application/json",
-                            "type": "application/vnd.openstack.identity-v2.0+json"
-                        }
-                    ],
-                    "status": "stable",
-                    "updated": "2014-04-17T00:00:00Z"
-                }
-            ]
-        }
-    }
-
-.. code-block:: bash
-
-    $ curl "http://0.0.0.0:35357/v2.0/"
-
-Returns:
-
-.. code-block:: javascript
-
-    {
-        "version": {
-            "id": "v2.0",
-            "links": [
-                {
-                    "href": "http://127.0.0.1:35357/v2.0/",
-                    "rel": "self"
-                },
-                {
-                    "href": "https://docs.openstack.org/",
-                    "rel": "describedby",
-                    "type": "text/html"
-                }
-            ],
-            "media-types": [
-                {
-                    "base": "application/json",
-                    "type": "application/vnd.openstack.identity-v2.0+json"
-                }
-            ],
-            "status": "stable",
-            "updated": "2014-04-17T00:00:00Z"
-        }
-    }
-
-GET /extensions
-===============
-
-Discover the API extensions enabled at the endpoint:
-
-.. code-block:: bash
-
-    $ curl "http://localhost:35357/v2.0/extensions/"
-
-Returns:
-
-.. code-block:: javascript
-
-    {
-        "extensions":{
-            "values":[]
-        }
-    }
-
-POST /tokens
-============
-
-Authenticate by exchanging credentials for an access token:
-
-.. code-block:: bash
-
-    $ curl -d '
-       {"auth": {
-          "tenantName": "customer-x",
-          "passwordCredentials": {
-            "username": "joeuser",
-            "password": "secret"
-           }
-         }
-       }' \
-       -H "Content-type: application/json" \
-       "http://localhost:35357/v2.0/tokens"
-
-Returns:
-
-.. code-block:: javascript
-
-    {
-        "access":{
-            "token":{
-                "expires":"2012-02-05T00:00:00",
-                "id":"887665443383838",
-                "tenant":{
-                    "id":"1",
-                    "name":"customer-x"
-                }
-            },
-            "serviceCatalog":[
-                {
-                    "endpoints":[
-                    {
-                        "adminURL":"http://swift.admin-nets.local:8080/",
-                        "region":"RegionOne",
-                        "internalURL":"http://127.0.0.1:8080/v1/AUTH_1",
-                        "publicURL":"http://swift.publicinternets.com/v1/AUTH_1"
-                    }
-                    ],
-                    "type":"object-store",
-                    "name":"swift"
-                },
-                {
-                    "endpoints":[
-                    {
-                        "adminURL":"http://cdn.admin-nets.local/v1.1/1",
-                        "region":"RegionOne",
-                        "internalURL":"http://127.0.0.1:7777/v1.1/1",
-                        "publicURL":"http://cdn.publicinternets.com/v1.1/1"
-                    }
-                    ],
-                    "type":"object-store",
-                    "name":"cdn"
-                }
-            ],
-            "user":{
-                "id":"1",
-                "roles":[
-                    {
-                    "tenantId":"1",
-                    "id":"3",
-                    "name":"Member"
-                    }
-                ],
-                "name":"joeuser"
-            }
-        }
-    }
-
-.. note::
-
-    Take note of the value ['access']['token']['id'] value produced here (``887665443383838``, above), as you can use it in the calls below.
-
-GET /tokens/{token_id}
-======================
-
-.. note::
-
-    This call refers to a token known to be valid, ``887665443383838`` in this case.
-
-Validate a token:
-
-.. code-block:: bash
-
-    $ curl -H "X-Auth-Token:999888777666" \
-       "http://localhost:35357/v2.0/tokens/887665443383838"
-
-If the token is valid, returns:
-
-.. code-block:: javascript
-
-    {
-        "access":{
-            "token":{
-                "expires":"2012-02-05T00:00:00",
-                "id":"887665443383838",
-                "tenant":{
-                    "id":"1",
-                    "name":"customer-x"
-                }
-            },
-            "user":{
-                "name":"joeuser",
-                "tenantName":"customer-x",
-                "id":"1",
-                "roles":[
-                    {
-                        "serviceId":"1",
-                        "id":"3",
-                        "name":"Member"
-                    }
-                ],
-                "tenantId":"1"
-            }
-        }
-    }
-
-HEAD /tokens/{token_id}
-=======================
-
-This is a high-performance variant of the GET call documented above, which
-by definition, returns no response body:
-
-.. code-block:: bash
-
-    $ curl -I -H "X-Auth-Token:999888777666" \
-       "http://localhost:35357/v2.0/tokens/887665443383838"
-
-... which returns ``200``, indicating the token is valid::
-
-    HTTP/1.1 200 OK
-    Content-Length: 0
-    Content-Type: None
-    Date: Tue, 08 Nov 2011 23:07:44 GMT
-
-GET /tokens/{token_id}/endpoints
-================================
-
-List all endpoints for a token:
-
-.. code-block:: bash
-
-    $ curl -H "X-Auth-Token:999888777666" \
-       "http://localhost:35357/v2.0/tokens/887665443383838/endpoints"
-
-Returns:
-
-.. code-block:: javascript
-
-    {
-        "endpoints_links": [
-            {
-                "href": "http://127.0.0.1:35357/tokens/887665443383838/endpoints?'marker=5&limit=10'",
-                "rel": "next"
-            }
-        ],
-        "endpoints": [
-            {
-                "internalURL": "http://127.0.0.1:8080/v1/AUTH_1",
-                "name": "swift",
-                "adminURL": "http://swift.admin-nets.local:8080/",
-                "region": "RegionOne",
-                "tenantId": 1,
-                "type": "object-store",
-                "id": 1,
-                "publicURL": "http://swift.publicinternets.com/v1/AUTH_1"
-            },
-            {
-                "internalURL": "http://localhost:8774/v1.0",
-                "name": "nova_compat",
-                "adminURL": "http://127.0.0.1:8774/v1.0",
-                "region": "RegionOne",
-                "tenantId": 1,
-                "type": "compute",
-                "id": 2,
-                "publicURL": "http://nova.publicinternets.com/v1.0/"
-            },
-            {
-                "internalURL": "http://localhost:8774/v1.1",
-                "name": "nova",
-                "adminURL": "http://127.0.0.1:8774/v1.1",
-                "region": "RegionOne",
-                "tenantId": 1,
-                "type": "compute",
-                "id": 3,
-                "publicURL": "http://nova.publicinternets.com/v1.1/
-            },
-            {
-                "internalURL": "http://127.0.0.1:9292/v1.1/",
-                "name": "glance",
-                "adminURL": "http://nova.admin-nets.local/v1.1/",
-                "region": "RegionOne",
-                "tenantId": 1,
-                "type": "image",
-                "id": 4,
-                "publicURL": "http://glance.publicinternets.com/v1.1/"
-            },
-            {
-                "internalURL": "http://127.0.0.1:7777/v1.1/1",
-                "name": "cdn",
-                "adminURL": "http://cdn.admin-nets.local/v1.1/1",
-                "region": "RegionOne",
-                "tenantId": 1,
-                "type": "object-store",
-                "id": 5,
-                "publicURL": "http://cdn.publicinternets.com/v1.1/1"
-            }
-        ]
-    }
-
-GET /tenants
-============
-
-List all of the tenants in the system (requires an Admin ``X-Auth-Token``):
-
-.. code-block:: bash
-
-    $ curl -H "X-Auth-Token:999888777666" \
-       "http://localhost:35357/v2.0/tenants"
-
-Returns:
-
-.. code-block:: javascript
-
-    {
-        "tenants_links": [],
-        "tenants": [
-            {
-                "enabled": false,
-                "description": "None",
-                "name": "project-y",
-                "id": "3"
-            },
-            {
-                "enabled": true,
-                "description": "None",
-                "name": "ANOTHER:TENANT",
-                "id": "2"
-            },
-            {
-                "enabled": true,
-                "description": "None",
-                "name": "customer-x",
-                "id": "1"
-            }
-        ]
-    }
-
-GET /tenants/{tenant_id}
-========================
-
-Retrieve information about a tenant, by tenant ID:
-
-.. code-block:: bash
-
-    $ curl -H "X-Auth-Token:999888777666" \
-       "http://localhost:35357/v2.0/tenants/1"
-
-Returns:
-
-.. code-block:: javascript
-
-    {
-        "tenant":{
-            "enabled":true,
-            "description":"None",
-            "name":"customer-x",
-            "id":"1"
-        }
-    }
-
-GET /tenants/{tenant_id}/users/{user_id}/roles
-==============================================
-
-List the roles a user has been granted on a tenant:
-
-.. code-block:: bash
-
-    $ curl -H "X-Auth-Token:999888777666" \
-       "http://localhost:35357/v2.0/tenants/1/users/1/roles"
-
-Returns:
-
-.. code-block:: javascript
-
-    {
-        "roles_links":[],
-        "roles":[
-            {
-                "id":"3",
-                "name":"Member"
-            }
-        ]
-    }
-
-GET /users/{user_id}
-====================
-
-Retrieve information about a user, by user ID:
-
-.. code-block:: bash
-
-    $ curl -H "X-Auth-Token:999888777666" \
-       "http://localhost:35357/v2.0/users/1"
-
-Returns:
-
-.. code-block:: javascript
-
-    {
-        "user":{
-            "tenantId":"1",
-            "enabled":true,
-            "id":"1",
-            "name":"joeuser"
-        }
-    }
-
-GET /tokens/revoked
-===================
-
-Get the revocation list:
-
-.. code-block:: bash
-
-    curl -s -H "X-Auth-Token: $OS_TOKEN" \
-      "http://localhost:35357/v2.0/tokens/revoked" |
-     jq -r .signed |
-     openssl cms -verify \
-      -certfile /etc/keystone/ssl/certs/signing_cert.pem \
-      -CAfile /etc/keystone/ssl/certs/ca.pem \
-      -inform PEM \
-      -nosmimecap -nodetach -nocerts -noattr 2>/dev/null |
-     python -m json.tool
-
-Example response:
-
-.. code-block:: javascript
-
-    {
-        "revoked": [
-            {
-                "expires": "2014-06-10T21:40:14Z",
-                "id": "e6e2b5c9092751f88d2bcd30b09777a9"
-            },
-            {
-                "expires": "2014-06-10T21:47:29Z",
-                "id": "883ef5d610bd1c68fbaa8ac528aa9f17"
-            },
-            {
-                "expires": "2014-06-10T21:51:52Z",
-                "id": "41775ff4838f8f406b7bad28bea0dde6"
-            }
-        ]
     }

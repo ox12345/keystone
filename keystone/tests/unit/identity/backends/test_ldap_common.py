@@ -21,6 +21,7 @@ import mock
 from oslo_config import fixture as config_fixture
 
 from keystone.common import driver_hints
+from keystone.common import provider_api
 import keystone.conf
 from keystone import exception as ks_exception
 from keystone.identity.backends.ldap import common as common_ldap
@@ -32,6 +33,7 @@ from keystone.tests.unit.ksfixtures import ldapdb
 
 
 CONF = keystone.conf.CONF
+PROVIDERS = provider_api.ProviderAPIs
 
 
 class DnCompareTest(unit.BaseTestCase):
@@ -399,10 +401,17 @@ class LDAPPagedResultsTest(unit.TestCase):
         self.config_fixture.config(group='ldap',
                                    page_size=1)
 
-        conn = self.identity_api.user.get_connection()
+        conn = PROVIDERS.identity_api.user.get_connection()
         conn._paged_search_s('dc=example,dc=test',
                              ldap.SCOPE_SUBTREE,
-                             'objectclass=*')
+                             'objectclass=*',
+                             ['mail', 'userPassword'])
+        # verify search_ext() args - attrlist is tricky due to ordering
+        args, _ = mock_search_ext.call_args
+        self.assertEqual(
+            ('dc=example,dc=test', 2, 'objectclass=*'), args[0:3])
+        attrlist = sorted([attr for attr in args[3] if attr])
+        self.assertEqual(['mail', 'userPassword'], attrlist)
 
 
 class CommonLdapTestCase(unit.BaseTestCase):
@@ -602,7 +611,7 @@ class LDAPSizeLimitTest(unit.TestCase):
     @mock.patch.object(fakeldap.FakeLdap, 'search_s')
     def test_search_s_sizelimit_exceeded(self, mock_search_s):
         mock_search_s.side_effect = ldap.SIZELIMIT_EXCEEDED
-        conn = self.identity_api.user.get_connection()
+        conn = PROVIDERS.identity_api.user.get_connection()
         self.assertRaises(ks_exception.LDAPSizeLimitExceeded,
                           conn.search_s,
                           'dc=example,dc=test',

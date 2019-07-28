@@ -18,7 +18,7 @@ import hashlib
 from oslo_log import log
 
 from keystone.auth import core
-from keystone.common import dependency
+from keystone.common import provider_api
 import keystone.conf
 from keystone import exception
 from keystone.federation import constants as federation_constants
@@ -30,9 +30,7 @@ CONF = keystone.conf.CONF
 LOG = log.getLogger(__name__)
 
 
-@dependency.requires('assignment_api', 'federation_api',
-                     'identity_api', 'resource_api')
-class TokenlessAuthHelper(object):
+class TokenlessAuthHelper(provider_api.ProviderAPIMixin, object):
     def __init__(self, env):
         """A init class for TokenlessAuthHelper.
 
@@ -137,7 +135,7 @@ class TokenlessAuthHelper(object):
             group_ids.extend(
                 utils.transform_to_group_ids(
                     mapped_properties['group_names'], mapping_id,
-                    self.identity_api, self.assignment_api))
+                    self.identity_api, self.resource_api))
             roles = self.assignment_api.get_roles_for_groups(group_ids,
                                                              project_id,
                                                              domain_id)

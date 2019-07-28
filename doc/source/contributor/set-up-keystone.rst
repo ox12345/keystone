@@ -41,7 +41,7 @@ The source install instructions specifically avoid using platform specific
 packages. Instead, we recommend using the source for the code and the Python
 Package Index (PyPi_) for development environment installations..
 
-.. _PyPi: http://pypi.python.org/pypi
+.. _PyPi: https://pypi.org/project/pypi
 
 It's expected that your system already has python_, pip_, and git_ available.
 
@@ -53,7 +53,7 @@ Clone the keystone repository:
 
 .. code-block:: bash
 
-    $ git clone https://git.openstack.org/openstack/keystone.git
+    $ git clone https://opendev.org/openstack/keystone.git
     $ cd keystone
 
 Install the keystone web service:
@@ -89,11 +89,10 @@ Deploying configuration files
 =============================
 
 You should be able to run keystone after installing via pip. Additional
-configuration files are required, however. The following files are required in
-order to run keystone:
+configuration files are required. The following file is required in order to
+run keystone:
 
 * ``keystone.conf``
-* ``keystone-paste.ini``
 
 Configuring Keystone with a sample file
 ---------------------------------------
@@ -121,7 +120,7 @@ If there is a new external library (e.g. ``oslo.messaging``) that utilizes the
 found in ``config-generator/keystone.conf``.
 
 You can also generate sample policy files using ``tox -e genpolicy``. Please refer
-to :doc:`../configuration` for guidance on specific configuration options or to
+to :doc:`../configuration/config-options` for guidance on specific configuration options or to
 view a sample paste file.
 
 Bootstrapping a test deployment
@@ -147,10 +146,10 @@ following uses ``uwsgi``:
 
 .. code-block:: bash
 
-    $ uwsgi --http 127.0.0.1:35357 --wsgi-file $(which keystone-wsgi-admin)
+    $ uwsgi --http 127.0.0.1:5000 --wsgi-file $(which keystone-wsgi-public)
 
 This runs Keystone with the configuration the etc/ directory of the project.
-See :doc:`../configuration` for details on how Keystone is configured. By default,
+See :doc:`../configuration/config-options` for details on how Keystone is configured. By default,
 Keystone is configured with SQL backends.
 
 Database setup
@@ -219,5 +218,5 @@ keystone client library `python-keystoneclient`_ which interacts exclusively
 through the REST API, and a command-line interface `python-openstackclient`_
 command-line interface.
 
-.. _`python-keystoneclient`: https://git.openstack.org/cgit/openstack/python-keystoneclient
-.. _`python-openstackclient`: https://git.openstack.org/cgit/openstack/python-openstackclient
+.. _`python-keystoneclient`: https://opendev.org/openstack/python-keystoneclient
+.. _`python-openstackclient`: https://opendev.org/openstack/python-openstackclient

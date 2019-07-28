@@ -21,10 +21,16 @@ from oslo_log import log
 import six
 import stevedore
 
+from keystone.common import provider_api
 from keystone.i18n import _
 
 
 LOG = log.getLogger(__name__)
+
+if hasattr(inspect, 'getfullargspec'):
+    getargspec = inspect.getfullargspec
+else:
+    getargspec = inspect.getargspec
 
 
 def response_truncated(f):
@@ -72,7 +78,7 @@ def load_driver(namespace, driver_name, *args):
         return driver_manager.driver
     except stevedore.exception.NoMatches:
         msg = (_('Unable to find %(name)r driver in %(namespace)r.'))
-        raise ImportError(msg, {'name': driver_name, 'namespace': namespace})
+        raise ImportError(msg % {'name': driver_name, 'namespace': namespace})
 
 
 class _TraceMeta(type):
@@ -85,7 +91,7 @@ class _TraceMeta(type):
 
     @staticmethod
     def wrapper(__f, __classname):
-        __argspec = inspect.getargspec(__f)
+        __argspec = getargspec(__f)
         __fn_info = '%(module)s.%(classname)s.%(funcname)s' % {
             'module': inspect.getmodule(__f).__name__,
             'classname': __classname,
@@ -164,12 +170,33 @@ class Manager(object):
     """
 
     driver_namespace = None
+    _provides_api = None
 
     def __init__(self, driver_name):
-        self.driver = load_driver(self.driver_namespace, driver_name)
+        if self._provides_api is None:
+            raise ValueError('Programming Error: All managers must provide an '
+                             'API that can be referenced by other components '
+                             'of Keystone.')
+        if driver_name is not None:
+            self.driver = load_driver(self.driver_namespace, driver_name)
+        self.__register_provider_api()
+
+    def __register_provider_api(self):
+        provider_api.ProviderAPIs._register_provider_api(
+            name=self._provides_api, obj=self)
 
     def __getattr__(self, name):
-        """Forward calls to the underlying driver."""
+        """Forward calls to the underlying driver.
+
+        This method checks for a provider api before forwarding.
+        """
+        try:
+            return getattr(provider_api.ProviderAPIs, name)
+        except AttributeError:
+            # NOTE(morgan): We didn't find a provider api, move on and
+            # forward to the driver as expected.
+            pass
+
         f = getattr(self.driver, name)
         if callable(f):
             # NOTE(dstanek): only if this is callable (class or function)

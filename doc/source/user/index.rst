@@ -20,15 +20,14 @@ User Documentation
 
 An end user can find the specific API documentation here, `OpenStack's Identity API`_.
 
-.. _`OpenStack's Identity API`: https://developer.openstack.org/api-ref/identity/v3
-
-.. note::
-
-   Following are some API examples using curl. Note that these examples are not
-   automatically generated. They can be outdated as things change and are subject
-   to regular updates and changes.
+.. _`OpenStack's Identity API`: https://docs.openstack.org/api-ref/identity/v3
 
 .. toctree::
-    :maxdepth: 2
+    :maxdepth: 1
 
+    supported_clients.rst
+    application_credentials.rst
+    trusts.rst
+    json_home.rst
     ../api_curl_examples.rst
+    multi-factor-authentication.rst

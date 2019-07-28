@@ -15,6 +15,7 @@
 import ast
 import re
 
+import flask
 import jsonschema
 from oslo_config import cfg
 from oslo_log import log
@@ -268,8 +269,11 @@ def validate_mapping_structure(ref):
         raise exception.ValidationError(messages)
 
 
-def validate_expiration(token_ref):
-    if timeutils.utcnow() > token_ref.expires:
+def validate_expiration(token):
+    token_expiration_datetime = timeutils.normalize_time(
+        timeutils.parse_isotime(token.expires_at)
+    )
+    if timeutils.utcnow() > token_expiration_datetime:
         raise exception.Unauthorized(_('Federation token is expired'))
 
 
@@ -352,7 +356,8 @@ def transform_to_group_ids(group_names, mapping_id,
     """Transform groups identified by name/domain to their ids.
 
     Function accepts list of groups identified by a name and domain giving
-    a list of group ids in return.
+    a list of group ids in return. A message is logged if the group doesn't
+    exist in the backend.
 
     Example of group_names parameter::
 
@@ -383,9 +388,6 @@ def transform_to_group_ids(group_names, mapping_id,
 
     :returns: generator object with group ids
 
-    :raises keystone.exception.MappedGroupNotFound: in case asked group doesn't
-        exist in the backend.
-
     """
     def resolve_domain(domain):
         """Return domain id.
@@ -409,14 +411,14 @@ def transform_to_group_ids(group_names, mapping_id,
                 group['name'], resolve_domain(group['domain']))
             yield group_dict['id']
         except exception.GroupNotFound:
-            raise exception.MappedGroupNotFound(group_id=group['name'],
-                                                mapping_id=mapping_id)
+            LOG.debug('Group %s has no entry in the backend',
+                      group['name'])
 
 
-def get_assertion_params_from_env(request):
-    LOG.debug('Environment variables: %s', request.environ)
+def get_assertion_params_from_env():
+    LOG.debug('Environment variables: %s', flask.request.environ)
     prefix = CONF.federation.assertion_prefix
-    for k, v in list(request.environ.items()):
+    for k, v in list(flask.request.environ.items()):
         if not k.startswith(prefix):
             continue
         # These bytes may be decodable as ISO-8859-1 according to Section
@@ -589,12 +591,7 @@ class RuleProcessor(object):
                 raise exception.ValidationError(msg)
 
             if user_type is None:
-                user_type = user['type'] = UserType.EPHEMERAL
-
-            if user_type == UserType.EPHEMERAL:
-                user['domain'] = {
-                    'id': CONF.federation.federated_domain_name
-                }
+                user['type'] = UserType.EPHEMERAL
 
         # initialize the group_ids as a set to eliminate duplicates
         user = {}
@@ -606,11 +603,14 @@ class RuleProcessor(object):
         # if mapping yield no valid identity values, we should bail right away
         # instead of continuing on with a normalized bogus user
         if not identity_values:
-            msg = _("Could not map any federated user properties to identity "
-                    "values. Check debug logs or the mapping used for "
-                    "additional details.")
+            msg = ("Could not map any federated user properties to identity "
+                   "values. Check debug logs or the mapping used for "
+                   "additional details.")
+            tr_msg = _("Could not map any federated user properties to "
+                       "identity values. Check debug logs or the mapping "
+                       "used for additional details.")
             LOG.warning(msg)
-            raise exception.ValidationError(msg)
+            raise exception.ValidationError(tr_msg)
 
         for identity_value in identity_values:
             if 'user' in identity_value:
@@ -683,7 +683,7 @@ class RuleProcessor(object):
 
         Example direct_maps::
 
-            ['Bob', 'Thompson', 'bob@example.com']
+            [['Bob'], ['Thompson'], ['bob@example.com']]
 
         :returns: new local mapping reference with replaced values.
 
@@ -861,14 +861,18 @@ class RuleProcessor(object):
 def assert_enabled_identity_provider(federation_api, idp_id):
     identity_provider = federation_api.get_idp(idp_id)
     if identity_provider.get('enabled') is not True:
-        msg = _('Identity Provider %(idp)s is disabled') % {'idp': idp_id}
+        msg = 'Identity Provider %(idp)s is disabled' % {
+            'idp': idp_id}
+        tr_msg = _('Identity Provider %(idp)s is disabled') % {
+            'idp': idp_id}
         LOG.debug(msg)
-        raise exception.Forbidden(msg)
+        raise exception.Forbidden(tr_msg)
 
 
 def assert_enabled_service_provider_object(service_provider):
     if service_provider.get('enabled') is not True:
         sp_id = service_provider['id']
-        msg = _('Service Provider %(sp)s is disabled') % {'sp': sp_id}
+        msg = 'Service Provider %(sp)s is disabled' % {'sp': sp_id}
+        tr_msg = _('Service Provider %(sp)s is disabled') % {'sp': sp_id}
         LOG.debug(msg)
-        raise exception.Forbidden(msg)
+        raise exception.Forbidden(tr_msg)

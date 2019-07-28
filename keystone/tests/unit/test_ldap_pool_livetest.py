@@ -12,10 +12,9 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-import uuid
-
 import ldappool
 
+from keystone.common import provider_api
 import keystone.conf
 from keystone.identity.backends import ldap
 from keystone.identity.backends.ldap import common as ldap_common
@@ -26,6 +25,7 @@ from keystone.tests.unit import test_ldap_livetest
 
 
 CONF = keystone.conf.CONF
+PROVIDERS = provider_api.ProviderAPIs
 
 
 class LiveLDAPPoolIdentity(test_backend_ldap_pool.LdapPoolCommonTestMixin,
@@ -70,8 +70,8 @@ class LiveLDAPPoolIdentity(test_backend_ldap_pool.LdapPoolCommonTestMixin,
 
         with _get_conn() as c1:  # 1
             self.assertEqual(1, len(ldappool_cm))
-            self.assertTrue(c1.connected, True)
-            self.assertTrue(c1.active, True)
+            self.assertTrue(c1.connected)
+            self.assertTrue(c1.active)
             with _get_conn() as c2:  # conn2
                 self.assertEqual(2, len(ldappool_cm))
                 self.assertTrue(c2.connected)
@@ -99,25 +99,22 @@ class LiveLDAPPoolIdentity(test_backend_ldap_pool.LdapPoolCommonTestMixin,
         self.test_password_change_with_pool()
 
         self.assertRaises(AssertionError,
-                          self.identity_api.authenticate,
+                          PROVIDERS.identity_api.authenticate,
                           context={},
                           user_id=self.user_sna['id'],
                           password=old_password)
 
     def _create_user_and_authenticate(self, password):
-        # TODO(shaleh): port to new_user_ref()
-        user_dict = {
-            'domain_id': CONF.identity.default_domain_id,
-            'name': uuid.uuid4().hex,
-            'password': password}
-        user = self.identity_api.create_user(user_dict)
+        user = unit.create_user(PROVIDERS.identity_api,
+                                CONF.identity.default_domain_id,
+                                password=password)
 
-        self.identity_api.authenticate(
-            self.make_request(),
-            user_id=user['id'],
-            password=password)
+        with self.make_request():
+            PROVIDERS.identity_api.authenticate(
+                user_id=user['id'],
+                password=password)
 
-        return self.identity_api.get_user(user['id'])
+        return PROVIDERS.identity_api.get_user(user['id'])
 
     def _get_auth_conn_pool_cm(self):
         pool_url = (
@@ -165,7 +162,7 @@ class LiveLDAPPoolIdentity(test_backend_ldap_pool.LdapPoolCommonTestMixin,
                             _.unbind_s()
 
         user3['password'] = new_password
-        self.identity_api.update_user(user3['id'], user3)
+        PROVIDERS.identity_api.update_user(user3['id'], user3)
 
         return user3
 
@@ -182,8 +179,9 @@ class LiveLDAPPoolIdentity(test_backend_ldap_pool.LdapPoolCommonTestMixin,
         # successfully which is not desired if password change is frequent
         # use case in a deployment.
         # This can happen in multiple concurrent connections case only.
-        user_ref = self.identity_api.authenticate(
-            self.make_request(), user_id=user['id'], password=old_password)
+        with self.make_request():
+            user_ref = PROVIDERS.identity_api.authenticate(
+                user_id=user['id'], password=old_password)
 
         self.assertDictEqual(user, user_ref)
 
@@ -198,6 +196,6 @@ class LiveLDAPPoolIdentity(test_backend_ldap_pool.LdapPoolCommonTestMixin,
         # now as connection lifetime is zero, so authentication
         # with old password will always fail.
         self.assertRaises(AssertionError,
-                          self.identity_api.authenticate,
+                          PROVIDERS.identity_api.authenticate,
                           context={}, user_id=user['id'],
                           password=old_password)

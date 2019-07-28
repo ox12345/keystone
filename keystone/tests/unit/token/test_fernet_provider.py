@@ -22,68 +22,44 @@ import six
 
 from keystone import auth
 from keystone.common import fernet_utils
+from keystone.common import provider_api
 from keystone.common import utils
 import keystone.conf
 from keystone import exception
 from keystone.federation import constants as federation_constants
 from keystone.tests import unit
+from keystone.tests.unit import default_fixtures
 from keystone.tests.unit import ksfixtures
 from keystone.tests.unit.ksfixtures import database
-from keystone.token.providers import common
+from keystone.token import provider
 from keystone.token.providers import fernet
-from keystone.token.providers.fernet import token_formatters
+from keystone.token import token_formatters
 
 
 CONF = keystone.conf.CONF
+PROVIDERS = provider_api.ProviderAPIs
 
 
 class TestFernetTokenProvider(unit.TestCase):
     def setUp(self):
         super(TestFernetTokenProvider, self).setUp()
-        self.useFixture(
-            ksfixtures.KeyRepository(
-                self.config_fixture,
-                'fernet_tokens',
-                CONF.fernet_tokens.max_active_keys
-            )
-        )
         self.provider = fernet.Provider()
 
-    def test_supports_bind_authentication_returns_false(self):
-        self.assertFalse(self.provider._supports_bind_authentication)
-
-    def test_needs_persistence_returns_false(self):
-        self.assertFalse(self.provider.needs_persistence())
-
-    def test_invalid_v3_token_raises_token_not_found(self):
+    def test_invalid_token_raises_token_not_found(self):
         token_id = uuid.uuid4().hex
-        e = self.assertRaises(
+        self.assertRaises(
             exception.TokenNotFound,
             self.provider.validate_token,
             token_id)
-        self.assertIn(token_id, u'%s' % e)
-
-    def test_invalid_v2_token_raises_token_not_found(self):
-        token_id = uuid.uuid4().hex
-        e = self.assertRaises(
-            exception.TokenNotFound,
-            self.provider.validate_token,
-            token_id)
-        self.assertIn(token_id, u'%s' % e)
 
 
 class TestValidate(unit.TestCase):
     def setUp(self):
         super(TestValidate, self).setUp()
-        self.useFixture(
-            ksfixtures.KeyRepository(
-                self.config_fixture,
-                'fernet_tokens',
-                CONF.fernet_tokens.max_active_keys
-            )
-        )
         self.useFixture(database.Database())
         self.load_backends()
+        PROVIDERS.resource_api.create_domain(
+            default_fixtures.ROOT_DOMAIN['id'], default_fixtures.ROOT_DOMAIN)
 
     def config_overrides(self):
         super(TestValidate, self).config_overrides()
@@ -94,101 +70,101 @@ class TestValidate(unit.TestCase):
         # with a simple token.
 
         domain_ref = unit.new_domain_ref()
-        domain_ref = self.resource_api.create_domain(domain_ref['id'],
-                                                     domain_ref)
+        domain_ref = PROVIDERS.resource_api.create_domain(
+            domain_ref['id'], domain_ref
+        )
 
         user_ref = unit.new_user_ref(domain_ref['id'])
-        user_ref = self.identity_api.create_user(user_ref)
+        user_ref = PROVIDERS.identity_api.create_user(user_ref)
 
         method_names = ['password']
-        token_id, token_data_ = self.token_provider_api.issue_token(
+        token = PROVIDERS.token_provider_api.issue_token(
             user_ref['id'], method_names)
 
-        token_data = self.token_provider_api.validate_token(token_id)
-        token = token_data['token']
-        self.assertIsInstance(token['audit_ids'], list)
-        self.assertIsInstance(token['expires_at'], str)
-        self.assertIsInstance(token['issued_at'], str)
-        self.assertEqual(method_names, token['methods'])
-        exp_user_info = {
-            'id': user_ref['id'],
-            'name': user_ref['name'],
-            'domain': {
-                'id': domain_ref['id'],
-                'name': domain_ref['name'],
-            },
-            'password_expires_at': user_ref['password_expires_at']
-        }
-        self.assertEqual(exp_user_info, token['user'])
+        token = PROVIDERS.token_provider_api.validate_token(token.id)
+        self.assertIsInstance(token.audit_ids, list)
+        self.assertIsInstance(token.expires_at, str)
+        self.assertIsInstance(token.issued_at, str)
+        self.assertEqual(method_names, token.methods)
+        self.assertEqual(user_ref['id'], token.user_id)
+        self.assertEqual(user_ref['name'], token.user['name'])
+        self.assertDictEqual(domain_ref, token.user_domain)
+        self.assertEqual(
+            user_ref['password_expires_at'], token.user['password_expires_at']
+        )
 
     def test_validate_v3_token_federated_info(self):
         # Check the user fields in the token result when use validate_v3_token
         # when the token has federated info.
 
         domain_ref = unit.new_domain_ref()
-        domain_ref = self.resource_api.create_domain(domain_ref['id'],
-                                                     domain_ref)
+        domain_ref = PROVIDERS.resource_api.create_domain(
+            domain_ref['id'], domain_ref
+        )
 
         user_ref = unit.new_user_ref(domain_ref['id'])
-        user_ref = self.identity_api.create_user(user_ref)
+        user_ref = PROVIDERS.identity_api.create_user(user_ref)
 
         method_names = ['mapped']
 
         group_ids = [uuid.uuid4().hex, ]
-        identity_provider = uuid.uuid4().hex
+        idp_id = uuid.uuid4().hex
+        idp_ref = {
+            'id': idp_id,
+            'description': uuid.uuid4().hex,
+            'enabled': True
+        }
+        self.federation_api.create_idp(idp_id, idp_ref)
         protocol = uuid.uuid4().hex
         auth_context_params = {
             'user_id': user_ref['id'],
             'user_name': user_ref['name'],
             'group_ids': group_ids,
-            federation_constants.IDENTITY_PROVIDER: identity_provider,
+            federation_constants.IDENTITY_PROVIDER: idp_id,
             federation_constants.PROTOCOL: protocol,
         }
         auth_context = auth.core.AuthContext(**auth_context_params)
-        token_id, token_data_ = self.token_provider_api.issue_token(
+        token = PROVIDERS.token_provider_api.issue_token(
             user_ref['id'], method_names, auth_context=auth_context)
 
-        token_data = self.token_provider_api.validate_token(token_id)
-        token = token_data['token']
-        exp_user_info = {
-            'id': user_ref['id'],
-            'name': user_ref['name'],
-            'domain': {'id': CONF.federation.federated_domain_name,
-                       'name': CONF.federation.federated_domain_name, },
-            federation_constants.FEDERATION: {
-                'groups': [{'id': group_id} for group_id in group_ids],
-                'identity_provider': {'id': identity_provider, },
-                'protocol': {'id': protocol, },
-            },
-        }
-        self.assertDictEqual(exp_user_info, token['user'])
+        token = PROVIDERS.token_provider_api.validate_token(token.id)
+
+        self.assertEqual(user_ref['id'], token.user_id)
+        self.assertEqual(user_ref['name'], token.user['name'])
+        self.assertDictEqual(domain_ref, token.user_domain)
+        exp_group_ids = [{'id': group_id} for group_id in group_ids]
+        self.assertEqual(exp_group_ids, token.federated_groups)
+        self.assertEqual(idp_id, token.identity_provider_id)
+        self.assertEqual(protocol, token.protocol_id)
 
     def test_validate_v3_token_trust(self):
         # Check the trust fields in the token result when use validate_v3_token
         # when the token has trust info.
 
         domain_ref = unit.new_domain_ref()
-        domain_ref = self.resource_api.create_domain(domain_ref['id'],
-                                                     domain_ref)
+        domain_ref = PROVIDERS.resource_api.create_domain(
+            domain_ref['id'], domain_ref
+        )
 
         user_ref = unit.new_user_ref(domain_ref['id'])
-        user_ref = self.identity_api.create_user(user_ref)
+        user_ref = PROVIDERS.identity_api.create_user(user_ref)
 
         trustor_user_ref = unit.new_user_ref(domain_ref['id'])
-        trustor_user_ref = self.identity_api.create_user(trustor_user_ref)
+        trustor_user_ref = PROVIDERS.identity_api.create_user(trustor_user_ref)
 
         project_ref = unit.new_project_ref(domain_id=domain_ref['id'])
-        project_ref = self.resource_api.create_project(project_ref['id'],
-                                                       project_ref)
+        project_ref = PROVIDERS.resource_api.create_project(
+            project_ref['id'], project_ref
+        )
 
         role_ref = unit.new_role_ref()
-        role_ref = self.role_api.create_role(role_ref['id'], role_ref)
+        role_ref = PROVIDERS.role_api.create_role(role_ref['id'], role_ref)
 
-        self.assignment_api.create_grant(
+        PROVIDERS.assignment_api.create_grant(
             role_ref['id'], user_id=user_ref['id'],
             project_id=project_ref['id'])
 
-        self.assignment_api.create_grant(
+        PROVIDERS.assignment_api.create_grant(
             role_ref['id'], user_id=trustor_user_ref['id'],
             project_id=project_ref['id'])
 
@@ -197,45 +173,35 @@ class TestValidate(unit.TestCase):
         trust_ref = unit.new_trust_ref(
             trustor_user_id, trustee_user_id, project_id=project_ref['id'],
             role_ids=[role_ref['id'], ])
-        trust_ref = self.trust_api.create_trust(trust_ref['id'], trust_ref,
-                                                trust_ref['roles'])
+        trust_ref = PROVIDERS.trust_api.create_trust(
+            trust_ref['id'], trust_ref, trust_ref['roles']
+        )
 
         method_names = ['password']
 
-        token_id, token_data_ = self.token_provider_api.issue_token(
+        token = PROVIDERS.token_provider_api.issue_token(
             user_ref['id'], method_names, project_id=project_ref['id'],
-            trust=trust_ref)
+            trust_id=trust_ref['id'])
 
-        token_data = self.token_provider_api.validate_token(token_id)
-        token = token_data['token']
-        exp_trust_info = {
-            'id': trust_ref['id'],
-            'impersonation': False,
-            'trustee_user': {'id': user_ref['id'], },
-            'trustor_user': {'id': trustor_user_ref['id'], },
-        }
-        self.assertEqual(exp_trust_info, token['OS-TRUST:trust'])
+        token = PROVIDERS.token_provider_api.validate_token(token.id)
+        self.assertEqual(trust_ref['id'], token.trust_id)
+        self.assertFalse(token.trust['impersonation'])
+        self.assertEqual(user_ref['id'], token.trustee['id'])
+        self.assertEqual(trustor_user_ref['id'], token.trustor['id'])
 
     def test_validate_v3_token_validation_error_exc(self):
         # When the token format isn't recognized, TokenNotFound is raised.
 
         # A uuid string isn't a valid Fernet token.
         token_id = uuid.uuid4().hex
-        self.assertRaises(exception.TokenNotFound,
-                          self.token_provider_api.validate_token, token_id)
+        self.assertRaises(
+            exception.TokenNotFound,
+            PROVIDERS.token_provider_api.validate_token,
+            token_id
+        )
 
 
 class TestTokenFormatter(unit.TestCase):
-    def setUp(self):
-        super(TestTokenFormatter, self).setUp()
-        self.useFixture(
-            ksfixtures.KeyRepository(
-                self.config_fixture,
-                'fernet_tokens',
-                CONF.fernet_tokens.max_active_keys
-            )
-        )
-
     def test_restore_padding(self):
         # 'a' will result in '==' padding, 'aa' will result in '=' padding, and
         # 'aaa' will result in no padding.
@@ -255,6 +221,71 @@ class TestTokenFormatter(unit.TestCase):
             )
             self.assertEqual(encoded_string, encoded_str_with_padding_restored)
 
+    def test_create_validate_federated_unscoped_token_non_uuid_user_id(self):
+        exp_user_id = hashlib.sha256().hexdigest()
+        exp_methods = ['password']
+        exp_expires_at = utils.isotime(timeutils.utcnow(), subsecond=True)
+        exp_audit_ids = [provider.random_urlsafe_str()]
+        exp_federated_group_ids = [{'id': uuid.uuid4().hex}]
+        exp_idp_id = uuid.uuid4().hex
+        exp_protocol_id = uuid.uuid4().hex
+
+        token_formatter = token_formatters.TokenFormatter()
+        token = token_formatter.create_token(user_id=exp_user_id,
+                                             expires_at=exp_expires_at,
+                                             audit_ids=exp_audit_ids,
+                                             payload_class=token_formatters.FederatedUnscopedPayload,
+                                             methods=exp_methods,
+                                             federated_group_ids=exp_federated_group_ids,
+                                             identity_provider_id=exp_idp_id,
+                                             protocol_id=exp_protocol_id)
+
+        (user_id, methods, audit_ids, system, domain_id, project_id, trust_id,
+         federated_group_ids, identity_provider_id, protocol_id,
+         access_token_id, app_cred_id, issued_at, expires_at) = token_formatter.validate_token(token)
+
+        self.assertEqual(exp_user_id, user_id)
+        self.assertTrue(isinstance(user_id, six.string_types))
+        self.assertEqual(exp_methods, methods)
+        self.assertEqual(exp_audit_ids, audit_ids)
+        self.assertEqual(exp_federated_group_ids, federated_group_ids)
+        self.assertEqual(exp_idp_id, identity_provider_id)
+        self.assertEqual(exp_protocol_id, protocol_id)
+
+    def test_create_validate_federated_scoped_token_non_uuid_user_id(self):
+        exp_user_id = hashlib.sha256().hexdigest()
+        exp_methods = ['password']
+        exp_expires_at = utils.isotime(timeutils.utcnow(), subsecond=True)
+        exp_audit_ids = [provider.random_urlsafe_str()]
+        exp_federated_group_ids = [{'id': uuid.uuid4().hex}]
+        exp_idp_id = uuid.uuid4().hex
+        exp_protocol_id = uuid.uuid4().hex
+        exp_project_id = uuid.uuid4().hex
+
+        token_formatter = token_formatters.TokenFormatter()
+        token = token_formatter.create_token(user_id=exp_user_id,
+                                             expires_at=exp_expires_at,
+                                             audit_ids=exp_audit_ids,
+                                             payload_class=token_formatters.FederatedProjectScopedPayload,
+                                             methods=exp_methods,
+                                             federated_group_ids=exp_federated_group_ids,
+                                             identity_provider_id=exp_idp_id,
+                                             protocol_id=exp_protocol_id,
+                                             project_id=exp_project_id)
+
+        (user_id, methods, audit_ids, system, domain_id, project_id, trust_id,
+         federated_group_ids, identity_provider_id, protocol_id,
+         access_token_id, app_cred_id, issued_at, expires_at) = token_formatter.validate_token(token)
+
+        self.assertEqual(exp_user_id, user_id)
+        self.assertTrue(isinstance(user_id, six.string_types))
+        self.assertEqual(exp_methods, methods)
+        self.assertEqual(exp_audit_ids, audit_ids)
+        self.assertEqual(exp_project_id, project_id)
+        self.assertEqual(exp_federated_group_ids, federated_group_ids)
+        self.assertEqual(exp_idp_id, identity_provider_id)
+        self.assertEqual(exp_protocol_id, protocol_id)
+
 
 class TestPayloads(unit.TestCase):
     def assertTimestampsEqual(self, expected, actual):
@@ -272,7 +303,7 @@ class TestPayloads(unit.TestCase):
                                                        delta=1e-05)
 
     def test_strings_can_be_converted_to_bytes(self):
-        s = common.random_urlsafe_str()
+        s = provider.random_urlsafe_str()
         self.assertIsInstance(s, six.text_type)
 
         b = token_formatters.BasePayload.random_urlsafe_str_to_bytes(s)
@@ -322,40 +353,46 @@ class TestPayloads(unit.TestCase):
         self.assertEqual(expected_time_str, actual_time_str)
 
     def _test_payload(self, payload_class, exp_user_id=None, exp_methods=None,
-                      exp_project_id=None, exp_domain_id=None,
-                      exp_trust_id=None, exp_federated_info=None,
-                      exp_access_token_id=None):
+                      exp_system=None, exp_project_id=None, exp_domain_id=None,
+                      exp_trust_id=None, exp_federated_group_ids=None,
+                      exp_identity_provider_id=None, exp_protocol_id=None,
+                      exp_access_token_id=None, exp_app_cred_id=None):
         exp_user_id = exp_user_id or uuid.uuid4().hex
         exp_methods = exp_methods or ['password']
         exp_expires_at = utils.isotime(timeutils.utcnow(), subsecond=True)
-        exp_audit_ids = [common.random_urlsafe_str()]
+        exp_audit_ids = [provider.random_urlsafe_str()]
 
         payload = payload_class.assemble(
-            exp_user_id, exp_methods, exp_project_id, exp_domain_id,
-            exp_expires_at, exp_audit_ids, exp_trust_id, exp_federated_info,
-            exp_access_token_id)
+            exp_user_id, exp_methods, exp_system, exp_project_id,
+            exp_domain_id, exp_expires_at, exp_audit_ids, exp_trust_id,
+            exp_federated_group_ids, exp_identity_provider_id, exp_protocol_id,
+            exp_access_token_id, exp_app_cred_id)
 
-        (user_id, methods, project_id,
+        (user_id, methods, system, project_id,
          domain_id, expires_at, audit_ids,
-         trust_id, federated_info,
-         access_token_id) = payload_class.disassemble(payload)
+         trust_id, federated_group_ids, identity_provider_id, protocol_id,
+         access_token_id, app_cred_id) = payload_class.disassemble(payload)
 
         self.assertEqual(exp_user_id, user_id)
         self.assertEqual(exp_methods, methods)
         self.assertTimestampsEqual(exp_expires_at, expires_at)
         self.assertEqual(exp_audit_ids, audit_ids)
+        self.assertEqual(exp_system, system)
         self.assertEqual(exp_project_id, project_id)
         self.assertEqual(exp_domain_id, domain_id)
+        self.assertEqual(exp_federated_group_ids, federated_group_ids)
+        self.assertEqual(exp_identity_provider_id, identity_provider_id)
+        self.assertEqual(exp_protocol_id, protocol_id)
         self.assertEqual(exp_trust_id, trust_id)
         self.assertEqual(exp_access_token_id, access_token_id)
-
-        if exp_federated_info:
-            self.assertDictEqual(exp_federated_info, federated_info)
-        else:
-            self.assertIsNone(federated_info)
+        self.assertEqual(exp_app_cred_id, app_cred_id)
 
     def test_unscoped_payload(self):
         self._test_payload(token_formatters.UnscopedPayload)
+
+    def test_system_scoped_payload(self):
+        self._test_payload(token_formatters.SystemScopedPayload,
+                           exp_system='all')
 
     def test_project_scoped_payload(self):
         self._test_payload(token_formatters.ProjectScopedPayload,
@@ -415,13 +452,15 @@ class TestPayloads(unit.TestCase):
                            exp_trust_id=uuid.uuid4().hex)
 
     def _test_federated_payload_with_ids(self, exp_user_id, exp_group_id):
-        exp_federated_info = {'group_ids': [{'id': exp_group_id}],
-                              'idp_id': uuid.uuid4().hex,
-                              'protocol_id': uuid.uuid4().hex}
+        exp_federated_group_ids = [{'id': exp_group_id}]
+        exp_idp_id = uuid.uuid4().hex
+        exp_protocol_id = uuid.uuid4().hex
 
         self._test_payload(token_formatters.FederatedUnscopedPayload,
                            exp_user_id=exp_user_id,
-                           exp_federated_info=exp_federated_info)
+                           exp_federated_group_ids=exp_federated_group_ids,
+                           exp_identity_provider_id=exp_idp_id,
+                           exp_protocol_id=exp_protocol_id)
 
     def test_federated_payload_with_non_uuid_ids(self):
         self._test_federated_payload_with_ids('someNonUuidUserId',
@@ -432,31 +471,47 @@ class TestPayloads(unit.TestCase):
                                               '0123456789abcdef')
 
     def test_federated_project_scoped_payload(self):
-        exp_federated_info = {'group_ids': [{'id': 'someNonUuidGroupId'}],
-                              'idp_id': uuid.uuid4().hex,
-                              'protocol_id': uuid.uuid4().hex}
+        exp_federated_group_ids = [{'id': 'someNonUuidGroupId'}]
+        exp_idp_id = uuid.uuid4().hex
+        exp_protocol_id = uuid.uuid4().hex
 
         self._test_payload(token_formatters.FederatedProjectScopedPayload,
                            exp_user_id='someNonUuidUserId',
                            exp_methods=['token'],
                            exp_project_id=uuid.uuid4().hex,
-                           exp_federated_info=exp_federated_info)
+                           exp_federated_group_ids=exp_federated_group_ids,
+                           exp_identity_provider_id=exp_idp_id,
+                           exp_protocol_id=exp_protocol_id)
 
     def test_federated_domain_scoped_payload(self):
-        exp_federated_info = {'group_ids': [{'id': 'someNonUuidGroupId'}],
-                              'idp_id': uuid.uuid4().hex,
-                              'protocol_id': uuid.uuid4().hex}
+        exp_federated_group_ids = [{'id': 'someNonUuidGroupId'}]
+        exp_idp_id = uuid.uuid4().hex
+        exp_protocol_id = uuid.uuid4().hex
 
         self._test_payload(token_formatters.FederatedDomainScopedPayload,
                            exp_user_id='someNonUuidUserId',
                            exp_methods=['token'],
                            exp_domain_id=uuid.uuid4().hex,
-                           exp_federated_info=exp_federated_info)
+                           exp_federated_group_ids=exp_federated_group_ids,
+                           exp_identity_provider_id=exp_idp_id,
+                           exp_protocol_id=exp_protocol_id)
 
     def test_oauth_scoped_payload(self):
         self._test_payload(token_formatters.OauthScopedPayload,
                            exp_project_id=uuid.uuid4().hex,
                            exp_access_token_id=uuid.uuid4().hex)
+
+    def test_app_cred_scoped_payload_with_non_uuid_ids(self):
+        self._test_payload(token_formatters.ApplicationCredentialScopedPayload,
+                           exp_user_id='someNonUuidUserId',
+                           exp_project_id='someNonUuidProjectId',
+                           exp_app_cred_id='someNonUuidAppCredId')
+
+    def test_app_cred_scoped_payload_with_16_char_non_uuid_ids(self):
+        self._test_payload(token_formatters.ApplicationCredentialScopedPayload,
+                           exp_user_id='0123456789abcdef',
+                           exp_project_id='0123456789abcdef',
+                           exp_app_cred_id='0123456789abcdef')
 
 
 class TestFernetKeyRotation(unit.TestCase):
@@ -592,15 +647,6 @@ class TestFernetKeyRotation(unit.TestCase):
                 self.assertEqual(exp_keys, self.keys)
 
     def test_rotation_disk_write_fail(self):
-        # Init the key repository
-        self.useFixture(
-            ksfixtures.KeyRepository(
-                self.config_fixture,
-                'fernet_tokens',
-                CONF.fernet_tokens.max_active_keys
-            )
-        )
-
         # Make sure that the init key repository contains 2 keys
         self.assertRepositoryState(expected_size=2)
 
@@ -635,14 +681,25 @@ class TestFernetKeyRotation(unit.TestCase):
         # Assert that the key repository is now expanded.
         self.assertEqual(self.key_repository_size, 3)
 
-    def test_non_numeric_files(self):
-        self.useFixture(
-            ksfixtures.KeyRepository(
-                self.config_fixture,
-                'fernet_tokens',
-                CONF.fernet_tokens.max_active_keys
-            )
+    def test_rotation_empty_file(self):
+        active_keys = 2
+        self.assertRepositoryState(expected_size=active_keys)
+        empty_file = os.path.join(CONF.fernet_tokens.key_repository, '2')
+        with open(empty_file, 'w'):
+            pass
+        key_utils = fernet_utils.FernetUtils(
+            CONF.fernet_tokens.key_repository,
+            CONF.fernet_tokens.max_active_keys,
+            'fernet_tokens'
         )
+        # Rotate the keys to overwrite the empty file
+        key_utils.rotate_keys()
+        self.assertTrue(os.path.isfile(empty_file))
+        keys = key_utils.load_keys()
+        self.assertEqual(3, len(keys))
+        self.assertTrue(os.path.getsize(empty_file) > 0)
+
+    def test_non_numeric_files(self):
         evil_file = os.path.join(CONF.fernet_tokens.key_repository, '99.bak')
         with open(evil_file, 'w'):
             pass
@@ -663,18 +720,13 @@ class TestFernetKeyRotation(unit.TestCase):
 
 class TestLoadKeys(unit.TestCase):
 
-    def assertValidFernetKey(self, keys):
-        self.assertGreater(len(keys[0]), 0)
-        self.assertIsInstance(keys[0], str)
+    def assertValidFernetKeys(self, keys):
+        # Make sure each key is a non-empty string
+        for key in keys:
+            self.assertGreater(len(key), 0)
+            self.assertIsInstance(key, str)
 
     def test_non_numeric_files(self):
-        self.useFixture(
-            ksfixtures.KeyRepository(
-                self.config_fixture,
-                'fernet_tokens',
-                CONF.fernet_tokens.max_active_keys
-            )
-        )
         evil_file = os.path.join(CONF.fernet_tokens.key_repository, '~1')
         with open(evil_file, 'w'):
             pass
@@ -685,4 +737,17 @@ class TestLoadKeys(unit.TestCase):
         )
         keys = key_utils.load_keys()
         self.assertEqual(2, len(keys))
-        self.assertValidFernetKey(keys)
+        self.assertValidFernetKeys(keys)
+
+    def test_empty_files(self):
+        empty_file = os.path.join(CONF.fernet_tokens.key_repository, '2')
+        with open(empty_file, 'w'):
+            pass
+        key_utils = fernet_utils.FernetUtils(
+            CONF.fernet_tokens.key_repository,
+            CONF.fernet_tokens.max_active_keys,
+            'fernet_tokens'
+        )
+        keys = key_utils.load_keys()
+        self.assertEqual(2, len(keys))
+        self.assertValidFernetKeys(keys)

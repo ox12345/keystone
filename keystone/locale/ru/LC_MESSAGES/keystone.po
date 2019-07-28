@@ -9,9 +9,9 @@
 # Andreas Jaeger <jaegerandi@gmail.com>, 2016. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: keystone 12.0.0.0b4.dev8\n"
+"Project-Id-Version: keystone VERSION\n"
 "Report-Msgid-Bugs-To: https://bugs.launchpad.net/openstack-i18n/\n"
-"POT-Creation-Date: 2017-08-01 22:35+0000\n"
+"POT-Creation-Date: 2018-08-08 22:57+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -22,7 +22,7 @@ msgstr ""
 "%10<=4 && (n%100<12 || n%100>14) ? 1 : n%10==0 || (n%10>=5 && n%10<=9) || (n"
 "%100>=11 && n%100<=14)? 2 : 3);\n"
 "Generated-By: Babel 2.0\n"
-"X-Generator: Zanata 3.9.6\n"
+"X-Generator: Zanata 4.3.3\n"
 "Language-Team: Russian\n"
 
 #, python-format
@@ -152,25 +152,6 @@ msgstr "Невозможно изменить ИД пользователя"
 msgid "Cannot change user name"
 msgstr "Невозможно изменить имя пользователя"
 
-#, python-format
-msgid ""
-"Cannot create project, since it specifies its owner as domain %(domain_id)s, "
-"but specifies a parent in a different domain (%(parent_domain_id)s)."
-msgstr ""
-"Не удается создать проект, так как его владелец указан как домен "
-"%(domain_id)s, но его родительский объект задан в другом домене  "
-"(%(parent_domain_id)s)."
-
-#, python-format
-msgid ""
-"Cannot create project, since its parent (%(domain_id)s) is acting as a "
-"domain, but project's specified parent_id (%(parent_id)s) does not match "
-"this domain_id."
-msgstr ""
-"Не удается создать проект, так как его родительский элемент (%(domain_id)s) "
-"работает в качестве домена, но parent_id (%(parent_id)s), указанный для "
-"проекта, не соответствует данному domain_id."
-
 msgid "Cannot delete a domain that is enabled, please disable it first."
 msgstr "Невозможно удалить включенный домен, сначала выключите его."
 
@@ -296,30 +277,14 @@ msgstr ""
 msgid "Could not validate the access token"
 msgstr "Не удалось проверить ключ доступа"
 
-msgid "Credential belongs to another user"
-msgstr "Разрешение принадлежит другому пользователю"
-
 msgid "Credential signature mismatch"
 msgstr "Несовпадение подписи идентификационных данных"
-
-#, python-format
-msgid ""
-"Direct import of auth plugin %(name)r is deprecated as of Liberty in favor "
-"of its entrypoint from %(namespace)r and may be removed in N."
-msgstr ""
-"Прямой импорт модуля идентификации %(name)r устарел в Liberty и может быть "
-"удален в выпуске N. Вместо этого используется его точка входа из "
-"%(namespace)r."
 
 msgid ""
 "Disabling an entity where the 'enable' attribute is ignored by configuration."
 msgstr ""
 "Отключение сущности, при котором атрибут 'enable' в конфигурации "
 "игнорируется."
-
-#, python-format
-msgid "Domain (%s)"
-msgstr "Домен (%s)"
 
 #, python-format
 msgid "Domain cannot be named %s"
@@ -431,11 +396,6 @@ msgstr ""
 "Полю \"remaining_uses\" присвоено значение %(value)s, хотя поле не может "
 "быть задано для изменения делегирования группы доверия"
 
-msgid "Found invalid token: scoped to both project and domain."
-msgstr ""
-"Обнаружен недопустимый маркер: он относится и к уровню проекта, и к уровню "
-"домена."
-
 #, python-format
 msgid "Group %(group)s is not supported for domain specific configurations"
 msgstr ""
@@ -492,10 +452,6 @@ msgstr ""
 msgid "Invalid TLS / LDAPS combination"
 msgstr "Недопустимое сочетание TLS/LDAPS"
 
-#, python-format
-msgid "Invalid audit info data type: %(data)s (%(type)s)"
-msgstr "Недопустимый тип данных в информации контроля: %(data)s (%(type)s)"
-
 msgid "Invalid blob in credential"
 msgstr "Недопустимый большой двоичный объект в разрешении"
 
@@ -506,9 +462,6 @@ msgid ""
 msgstr ""
 "Обнаружено недопустимое имя домена %(domain)s в файле конфигурации %(file)s "
 "- файл пропущен."
-
-msgid "Invalid limit value"
-msgstr "Недопустимое значение ограничения"
 
 #, python-format
 msgid ""
@@ -549,9 +502,6 @@ msgid "Malformed endpoint URL (%(endpoint)s), see ERROR log for details."
 msgstr ""
 "Неверный формат URL конечной точки (%(endpoint)s), подробную информацию см. "
 "в протоколе ОШИБОК."
-
-msgid "Marker could not be found"
-msgstr "Не удалось найти маркер"
 
 #, python-format
 msgid "Max hierarchy depth reached for %s branch."
@@ -603,9 +553,6 @@ msgstr "С конечной точкой %(endpoint_id)s не связано н�
 msgid "No token in the request"
 msgstr "В запросе отсутствует маркер"
 
-msgid "Non-default domain is not supported"
-msgstr "Домен, отличный от применяемого по умолчанию, не поддерживается"
-
 msgid "One of the trust agents is disabled or deleted"
 msgstr "Один из доверенных агентов отключен или удален"
 
@@ -624,10 +571,6 @@ msgid ""
 msgstr ""
 "Параметр %(option)s в группе %(group)s не поддерживается для определенных "
 "конфигураций домена"
-
-#, python-format
-msgid "Project (%s)"
-msgstr "Проект (%s)"
 
 msgid "Project field is required and cannot be empty."
 msgstr "Поле проекта является обязательным и не может быть пустым."
@@ -659,17 +602,6 @@ msgid ""
 msgstr ""
 "Оставшаяся глубина изменения делегирования %(redelegation_depth)d выходит за "
 "пределы разрешенного диапазона [0..%(max_count)d]"
-
-#, python-format
-msgid ""
-"Request attribute %(attribute)s must be less than or equal to %(size)i. The "
-"server could not comply with the request because the attribute size is "
-"invalid (too large). The client is assumed to be in error."
-msgstr ""
-"Атрибут запроса %(attribute)s не может быть больше %(size)i. Серверу не "
-"удалось удовлетворить запрос, поскольку размер атрибута является "
-"недопустимым (слишком большой). Предположительно, клиент находится в "
-"состоянии ошибки."
 
 msgid "Request must have an origin query parameter"
 msgstr "Запрос должен содержать параметр origin"
@@ -723,9 +655,6 @@ msgstr "Укажите один домен или проект"
 msgid "Specify one of user or group"
 msgstr "Укажите одного пользователя или группу"
 
-msgid "Tenant name cannot contain reserved characters."
-msgstr "Имя арендатора не может содержать зарезервированные символы."
-
 msgid ""
 "The 'expires_at' must not be before now. The server could not comply with "
 "the request since it is either malformed or otherwise incorrect. The client "
@@ -752,9 +681,6 @@ msgstr ""
 
 msgid "The action you have requested has not been implemented."
 msgstr "Запрошенное действие не реализовано."
-
-msgid "The configured token provider does not support bind authentication."
-msgstr "Настроенный модуль маркера не поддерживает идентификацию привязки."
 
 #, python-format
 msgid ""
@@ -808,9 +734,6 @@ msgid ""
 msgstr ""
 "Метка в неожиданном формате. Сервер не может выполнить запрос, поскольку он "
 "либо искажен или неправилен. Клиент, как предполагается, является ошибочным."
-
-msgid "Token belongs to another user"
-msgstr "Маркер принадлежит другому пользователю"
 
 msgid "Token version is unrecognizable or unsupported."
 msgstr "Версия маркера не распознана либо не поддерживается."
@@ -886,9 +809,6 @@ msgstr "Обнаружен непредвиденный тип назначен�
 msgid "Unexpected status requested for JSON Home response, %s"
 msgstr "Запрошено неожиданное состояние для ответа JSON Home, %s"
 
-msgid "Unknown Target"
-msgstr "Неизвестный целевой объект"
-
 #, python-format
 msgid "Unknown domain '%(name)s' specified by --domain-name"
 msgstr "В опции --domain-name указано неизвестное имя домена '%(name)s'"
@@ -946,9 +866,6 @@ msgstr "Пользователь не является доверенным ли
 msgid "User not valid for tenant."
 msgstr "Недопустимый пользователь для арендатора."
 
-msgid "User roles not supported: tenant_id required"
-msgstr "Роли пользователей не поддерживаются, требуется tenant_id"
-
 #, python-format
 msgid "User type %s not supported"
 msgstr "Тип пользователя %s не поддерживается"
@@ -990,10 +907,6 @@ msgstr ""
 #, python-format
 msgid "group %(group)s"
 msgstr "группа %(group)s"
-
-#, python-format
-msgid "invalid date format %s"
-msgstr "Недопустимый формат даты %s"
 
 #, python-format
 msgid ""
@@ -1041,7 +954,3 @@ msgstr "tls_cacertdir %s не найден или не является ката
 #, python-format
 msgid "tls_cacertfile %s not found or is not a file"
 msgstr "tls_cacertfile %s не найден или не является файлом"
-
-#, python-format
-msgid "token reference must be a KeystoneToken type, got: %s"
-msgstr "Ссылка на маркер должна относиться к типу KeystoneToken, а получено %s"

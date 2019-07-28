@@ -16,9 +16,9 @@
 """Main entry point into the Catalog service."""
 
 from keystone.common import cache
-from keystone.common import dependency
 from keystone.common import driver_hints
 from keystone.common import manager
+from keystone.common import provider_api
 import keystone.conf
 from keystone import exception
 from keystone.i18n import _
@@ -26,6 +26,7 @@ from keystone import notifications
 
 
 CONF = keystone.conf.CONF
+PROVIDERS = provider_api.ProviderAPIs
 
 
 # This is a general cache region for catalog administration (CRUD operations).
@@ -41,8 +42,6 @@ MEMOIZE_COMPUTED_CATALOG = cache.get_memoization_decorator(
     region=COMPUTED_CATALOG_REGION)
 
 
-@dependency.provider('catalog_api')
-@dependency.requires('resource_api')
 class Manager(manager.Manager):
     """Default pivot point for the Catalog backend.
 
@@ -52,6 +51,7 @@ class Manager(manager.Manager):
     """
 
     driver_namespace = 'keystone.catalog'
+    _provides_api = 'catalog_api'
 
     _ENDPOINT = 'endpoint'
     _SERVICE = 'service'
@@ -59,6 +59,24 @@ class Manager(manager.Manager):
 
     def __init__(self):
         super(Manager, self).__init__(CONF.catalog.driver)
+        notifications.register_event_callback(
+            notifications.ACTIONS.deleted, 'project',
+            self._on_project_or_endpoint_delete)
+        notifications.register_event_callback(
+            notifications.ACTIONS.deleted, 'endpoint',
+            self._on_project_or_endpoint_delete)
+
+    def _on_project_or_endpoint_delete(self, service, resource_type, operation,
+                                       payload):
+        project_or_endpoint_id = payload['resource_info']
+        if resource_type == 'project':
+            PROVIDERS.catalog_api.delete_association_by_project(
+                project_or_endpoint_id)
+            PROVIDERS.catalog_api.delete_endpoint_group_association_by_project(
+                project_or_endpoint_id)
+        else:
+            PROVIDERS.catalog_api.delete_association_by_endpoint(
+                project_or_endpoint_id)
 
     def create_region(self, region_ref, initiator=None):
         # Check duplicate ID
@@ -216,13 +234,6 @@ class Manager(manager.Manager):
         return self.driver.list_endpoints(hints or driver_hints.Hints())
 
     @MEMOIZE_COMPUTED_CATALOG
-    def get_catalog(self, user_id, project_id):
-        try:
-            return self.driver.get_catalog(user_id, project_id)
-        except exception.NotFound:
-            raise exception.NotFound('Catalog not found for user and tenant')
-
-    @MEMOIZE_COMPUTED_CATALOG
     def get_v3_catalog(self, user_id, project_id):
         return self.driver.get_v3_catalog(user_id, project_id)
 
@@ -256,7 +267,7 @@ class Manager(manager.Manager):
     def get_endpoint_groups_for_project(self, project_id):
         # recover the project endpoint group memberships and for each
         # membership recover the endpoint group
-        self.resource_api.get_project(project_id)
+        PROVIDERS.resource_api.get_project(project_id)
         try:
             refs = self.list_endpoint_groups_for_project(project_id)
             endpoint_groups = [self.get_endpoint_group(

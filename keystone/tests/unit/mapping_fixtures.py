@@ -1325,6 +1325,32 @@ MAPPING_FOR_EPHEMERAL_USER = {
     ]
 }
 
+MAPPING_FOR_EPHEMERAL_USER_AND_GROUP_DOMAIN_NAME = {
+    'rules': [
+        {
+            'local': [
+                {
+                    'user': {
+                        'name': '{0}',
+                        'type': 'ephemeral'
+                    },
+                    'group': {
+                        'name': 'dummy',
+                        'domain': {
+                            'name': 'dummy'
+                        }
+                    }
+                }
+            ],
+            'remote': [
+                {
+                    'type': 'SSL_CLIENT_USER_NAME'
+                }
+            ]
+        }
+    ]
+}
+
 MAPPING_FOR_DEFAULT_EPHEMERAL_USER = {
     'rules': [
         {
@@ -1403,6 +1429,36 @@ MAPPING_BAD_LOCAL_SETUP = {
                 }
             ]
         }
+    ]
+}
+
+MAPPING_BAD_LOCAL_TYPE_USER_IN_ASSERTION = {
+    "rules": [
+        {
+            "local": [
+                {
+                    "user": {
+                        "name": "{0}",
+                        "groups": "{1}"
+                    }
+                }
+            ],
+            "remote": [
+                {
+                    "type": "openstack_user"
+                },
+                {
+                    "type": "openstack_groups"
+
+                },
+                {
+                    "type": "openstack_roles",
+                    "any_one_of": [
+                        "Admin"
+                    ]
+                }
+            ]
+        },
     ]
 }
 

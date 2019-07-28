@@ -16,17 +16,17 @@
 
 import six
 
-from keystone.common import dependency
+from keystone.common import provider_api
 from keystone import exception
 from keystone.oauth1.backends import base
 from keystone.oauth1 import core as oauth1
 
 
 METHOD_NAME = 'oauth_validator'
+PROVIDERS = provider_api.ProviderAPIs
 
 
-@dependency.requires('oauth_api')
-class OAuthValidator(oauth1.RequestValidator):
+class OAuthValidator(provider_api.ProviderAPIMixin, oauth1.RequestValidator):
 
     # TODO(mhu) set as option probably?
     @property
@@ -61,15 +61,15 @@ class OAuthValidator(oauth1.RequestValidator):
                 len(verifier) == 8)
 
     def get_client_secret(self, client_key, request):
-        client = self.oauth_api.get_consumer_with_secret(client_key)
+        client = PROVIDERS.oauth_api.get_consumer_with_secret(client_key)
         return client['secret']
 
     def get_request_token_secret(self, client_key, token, request):
-        token_ref = self.oauth_api.get_request_token(token)
+        token_ref = PROVIDERS.oauth_api.get_request_token(token)
         return token_ref['request_secret']
 
     def get_access_token_secret(self, client_key, token, request):
-        access_token = self.oauth_api.get_access_token(token)
+        access_token = PROVIDERS.oauth_api.get_access_token(token)
         return access_token['access_secret']
 
     def get_default_realms(self, client_key, request):
@@ -88,6 +88,35 @@ class OAuthValidator(oauth1.RequestValidator):
         return ''
 
     def invalidate_request_token(self, client_key, request_token, request):
+        """Invalidate a used request token.
+
+        :param client_key: The client/consumer key.
+        :param request_token: The request token string.
+        :param request: An oauthlib.common.Request object.
+        :returns: None
+
+        Per `Section 2.3`_ of the spec:
+
+        "The server MUST (...) ensure that the temporary
+        credentials have not expired or been used before."
+
+        .. _`Section 2.3`: https://tools.ietf.org/html/rfc5849#section-2.3
+
+        This method should ensure that provided token won't validate anymore.
+        It can be simply removing RequestToken from storage or setting
+        specific flag that makes it invalid (note that such flag should be
+        also validated during request token validation).
+
+        This method is used by
+
+        * AccessTokenEndpoint
+        """
+        # FIXME(lbragstad): Remove the above documentation string once
+        # https://bugs.launchpad.net/keystone/+bug/1778603 is resolved. It is
+        # being duplicated here to work around oauthlib compatibility issues
+        # with Sphinx 1.7.5, which have been reported upstream in
+        # https://github.com/oauthlib/oauthlib/issues/558.
+
         # this method is invoked when an access token is generated out of a
         # request token, to make sure that request token cannot be consumed
         # anymore. This is done in the backend, so we do nothing here.
@@ -95,13 +124,13 @@ class OAuthValidator(oauth1.RequestValidator):
 
     def validate_client_key(self, client_key, request):
         try:
-            return self.oauth_api.get_consumer(client_key) is not None
+            return PROVIDERS.oauth_api.get_consumer(client_key) is not None
         except exception.NotFound:
             return False
 
     def validate_request_token(self, client_key, token, request):
         try:
-            req_token = self.oauth_api.get_request_token(token)
+            req_token = PROVIDERS.oauth_api.get_request_token(token)
             if req_token:
                 return req_token['consumer_id'] == client_key
             else:
@@ -111,7 +140,7 @@ class OAuthValidator(oauth1.RequestValidator):
 
     def validate_access_token(self, client_key, token, request):
         try:
-            return self.oauth_api.get_access_token(token) is not None
+            return PROVIDERS.oauth_api.get_access_token(token) is not None
         except exception.NotFound:
             return False
 
@@ -142,7 +171,7 @@ class OAuthValidator(oauth1.RequestValidator):
 
     def validate_verifier(self, client_key, token, verifier, request):
         try:
-            req_token = self.oauth_api.get_request_token(token)
+            req_token = PROVIDERS.oauth_api.get_request_token(token)
             return req_token['verifier'] == verifier
         except exception.NotFound:
             return False
@@ -177,6 +206,29 @@ class OAuthValidator(oauth1.RequestValidator):
 #                                            token["oauth_token_secret"])
 
     def save_verifier(self, token, verifier, request):
+        """Associate an authorization verifier with a request token.
+
+        :param token: A request token string.
+        :param verifier: A dictionary containing the oauth_verifier and
+                         oauth_token
+        :param request: An oauthlib.common.Request object.
+
+        We need to associate verifiers with tokens for validation during the
+        access token request.
+
+        Note that unlike save_x_token token here is the ``oauth_token`` token
+        string from the request token saved previously.
+
+        This method is used by
+
+        * AuthorizationEndpoint
+        """
+        # FIXME(lbragstad): Remove the above documentation string once
+        # https://bugs.launchpad.net/keystone/+bug/1778603 is resolved. It is
+        # being duplicated here to work around oauthlib compatibility issues
+        # with Sphinx 1.7.5, which have been reported upstream in
+        # https://github.com/oauthlib/oauthlib/issues/558.
+
         # keep the old logic for this, as it is done in two steps and requires
         # information that the request validator has no access to
         pass

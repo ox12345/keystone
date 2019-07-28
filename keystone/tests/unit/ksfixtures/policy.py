@@ -14,13 +14,13 @@
 import fixtures
 from oslo_policy import opts
 
-from keystone.common import policy
+from keystone.common.rbac_enforcer import policy
 
 
 class Policy(fixtures.Fixture):
     """A fixture for working with policy configuration."""
 
-    def __init__(self, policy_file, config_fixture):
+    def __init__(self, config_fixture, policy_file=None):
         self._policy_file = policy_file
         self._config_fixture = config_fixture
 
@@ -29,5 +29,4 @@ class Policy(fixtures.Fixture):
         opts.set_defaults(self._config_fixture.conf)
         self._config_fixture.config(group='oslo_policy',
                                     policy_file=self._policy_file)
-        policy.init()
         self.addCleanup(policy.reset)

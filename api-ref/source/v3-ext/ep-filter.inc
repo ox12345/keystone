@@ -52,12 +52,11 @@ service endpoints having the same characteristics
 
 Relationship: ``https://docs.openstack.org/api/openstack-identity/3/ext/OS-EP-FILTER/1.0/rel/endpoint_groups``
 
-Normal response codes: 201
-
-Error response codes: 401
-
 Request
 -------
+
+Parameters
+~~~~~~~~~~
 
 .. rest_parameters:: parameters.yaml
 
@@ -65,11 +64,28 @@ Request
    - filters: eg_filters
    - description: eg_description
 
+Example
+~~~~~~~
+
 .. literalinclude:: samples/OS-EP-FILTER/create-endpoint-group-request.json
    :language: javascript
 
 Response
 --------
+
+Status Codes
+~~~~~~~~~~~~
+
+.. rest_status_code:: success ../v3/status.yaml
+
+   - 201
+
+.. rest_status_code:: error ../v3/status.yaml
+
+   - 401
+
+Example
+~~~~~~~
 
 Status: 201 Created
 
@@ -85,12 +101,11 @@ Show details of an endpoint group.
 
 Relationship: ``https://docs.openstack.org/api/openstack-identity/3/ext/OS-EP-FILTER/1.0/rel/endpoint_group``
 
-Normal response codes: 200
-
-Error response codes: 401
-
 Request
 -------
+
+Parameters
+~~~~~~~~~~
 
 .. rest_parameters:: parameters.yaml
 
@@ -98,6 +113,20 @@ Request
 
 Response
 --------
+
+Status Codes
+~~~~~~~~~~~~
+
+.. rest_status_code:: success ../v3/status.yaml
+
+   - 200
+
+.. rest_status_code:: error ../v3/status.yaml
+
+   - 401
+
+Example
+~~~~~~~
 
 Status: 200 OK
 
@@ -113,12 +142,11 @@ Determine if an endpoint group exists.
 
 Relationship: ``https://docs.openstack.org/api/openstack-identity/3/ext/OS-EP-FILTER/1.0/rel/endpoint_group``
 
-Normal response codes: 200
-
-Error response codes: 401
-
 Request
 -------
+
+Parameters
+~~~~~~~~~~
 
 .. rest_parameters:: parameters.yaml
 
@@ -126,6 +154,20 @@ Request
 
 Response
 --------
+
+Status Codes
+~~~~~~~~~~~~
+
+.. rest_status_code:: success ../v3/status.yaml
+
+   - 200
+
+.. rest_status_code:: error ../v3/status.yaml
+
+   - 401
+
+Example
+~~~~~~~
 
 Status: 200 OK
 
@@ -138,12 +180,11 @@ Modify attributes of an endpoint group.
 
 Relationship: ``https://docs.openstack.org/api/openstack-identity/3/ext/OS-EP-FILTER/1.0/rel/endpoint_group``
 
-Normal response codes: 200
-
-Error response codes: 401
-
 Request
 -------
+
+Parameters
+~~~~~~~~~~
 
 .. rest_parameters:: parameters.yaml
 
@@ -152,11 +193,28 @@ Request
    - filters: eg_filters
    - description: eg_description
 
+Example
+~~~~~~~
+
 .. literalinclude:: samples/OS-EP-FILTER/update-endpoint-group-request.json
    :language: javascript
 
 Response
 --------
+
+Status Codes
+~~~~~~~~~~~~
+
+.. rest_status_code:: success ../v3/status.yaml
+
+   - 200
+
+.. rest_status_code:: error ../v3/status.yaml
+
+   - 401
+
+Example
+~~~~~~~
 
 Status: 200 OK
 
@@ -172,12 +230,11 @@ Delete an endpoint group.
 
 Relationship: ``https://docs.openstack.org/api/openstack-identity/3/ext/OS-EP-FILTER/1.0/rel/endpoint_group``
 
-Normal response codes: 204
-
-Error response codes: 401
-
 Request
 -------
+
+Parameters
+~~~~~~~~~~
 
 .. rest_parameters:: parameters.yaml
 
@@ -185,6 +242,18 @@ Request
 
 Response
 --------
+
+Status Codes
+~~~~~~~~~~~~
+
+.. rest_status_code:: success ../v3/status.yaml
+
+   - 204
+
+.. rest_status_code:: error ../v3/status.yaml
+
+   - 401
+
 
 Status: 204 No Content
 
@@ -197,12 +266,32 @@ List all available endpoint groups.
 
 Relationship: ``https://docs.openstack.org/api/openstack-identity/3/ext/OS-EP-FILTER/1.0/rel/endpoint_groups``
 
-Normal response codes: 200
+Request
+-------
 
-Error response codes: 401
+Parameters
+~~~~~~~~~~
+
+.. rest_parameters:: parameters.yaml
+
+   - name: request_endpoint_group_name_query_not_required
 
 Response
 --------
+
+Status Codes
+~~~~~~~~~~~~
+
+.. rest_status_code:: success ../v3/status.yaml
+
+   - 200
+
+.. rest_status_code:: error ../v3/status.yaml
+
+   - 401
+
+Example
+~~~~~~~
 
 Status: 200 OK
 
@@ -225,12 +314,11 @@ Creates a direct association between ``project_id`` and ``endpoint_id``.
 
 Relationship: ``https://docs.openstack.org/api/openstack-identity/3/ext/OS-EP-FILTER/1.0/rel/project_endpoint``
 
-Normal response codes: 204
-
-Error response codes: 401
-
 Request
 -------
+
+Parameters
+~~~~~~~~~~
 
 .. rest_parameters:: parameters.yaml
 
@@ -239,6 +327,20 @@ Request
 
 Response
 --------
+
+Status Codes
+~~~~~~~~~~~~
+
+.. rest_status_code:: success ../v3/status.yaml
+
+   - 204
+
+.. rest_status_code:: error ../v3/status.yaml
+
+   - 401
+
+Example
+~~~~~~~
 
 Status: 204 No Content
 
@@ -251,12 +353,11 @@ Verifies the existence of an association between ``project_id`` and ``endpoint_i
 
 Relationship: ``https://docs.openstack.org/api/openstack-identity/3/ext/OS-EP-FILTER/1.0/rel/project_endpoint``
 
-Normal response codes: 204
-
-Error response codes: 401
-
 Request
 -------
+
+Parameters
+~~~~~~~~~~
 
 .. rest_parameters:: parameters.yaml
 
@@ -265,6 +366,20 @@ Request
 
 Response
 --------
+
+Status Codes
+~~~~~~~~~~~~
+
+.. rest_status_code:: success ../v3/status.yaml
+
+   - 204
+
+.. rest_status_code:: error ../v3/status.yaml
+
+   - 401
+
+Example
+~~~~~~~
 
 Status: 204 No Content
 
@@ -277,12 +392,11 @@ Removes a direct association between ``project_id`` and ``endpoint_id``.
 
 Relationship: ``https://docs.openstack.org/api/openstack-identity/3/ext/OS-EP-FILTER/1.0/rel/project_endpoint``
 
-Normal response codes: 204
-
-Error response codes: 401
-
 Request
 -------
+
+Parameters
+~~~~~~~~~~
 
 .. rest_parameters:: parameters.yaml
 
@@ -291,6 +405,20 @@ Request
 
 Response
 --------
+
+Status Codes
+~~~~~~~~~~~~
+
+.. rest_status_code:: success ../v3/status.yaml
+
+   - 204
+
+.. rest_status_code:: error ../v3/status.yaml
+
+   - 401
+
+Example
+~~~~~~~
 
 Status: 204 No Content
 
@@ -303,12 +431,11 @@ Returns all endpoints that are currently associated with ``project_id``.
 
 Relationship: ``https://docs.openstack.org/api/openstack-identity/3/ext/OS-EP-FILTER/1.0/rel/project_endpoints``
 
-Normal response codes: 200
-
-Error response codes: 401
-
 Request
 -------
+
+Parameters
+~~~~~~~~~~
 
 .. rest_parameters:: parameters.yaml
 
@@ -316,6 +443,20 @@ Request
 
 Response
 --------
+
+Status Codes
+~~~~~~~~~~~~
+
+.. rest_status_code:: success ../v3/status.yaml
+
+   - 200
+
+.. rest_status_code:: error ../v3/status.yaml
+
+   - 401
+
+Example
+~~~~~~~
 
 Status: 200 OK
 
@@ -331,12 +472,11 @@ Returns all projects that are currently associated with ``endpoint_id``.
 
 Relationship: ``https://docs.openstack.org/api/openstack-identity/3/ext/OS-EP-FILTER/1.0/rel/endpoint_projects``
 
-Normal response codes: 200
-
-Error response codes: 401
-
 Request
 -------
+
+Parameters
+~~~~~~~~~~
 
 .. rest_parameters:: parameters.yaml
 
@@ -344,6 +484,20 @@ Request
 
 Response
 --------
+
+Status Codes
+~~~~~~~~~~~~
+
+.. rest_status_code:: success ../v3/status.yaml
+
+   - 200
+
+.. rest_status_code:: error ../v3/status.yaml
+
+   - 401
+
+Example
+~~~~~~~
 
 Status: 200 OK
 
@@ -367,12 +521,11 @@ Creates an association between ``endpoint_group_id`` and ``project_id``.
 
 Relationship: ``https://docs.openstack.org/api/openstack-identity/3/ext/OS-EP-FILTER/1.0/rel/endpoint_group_project``
 
-Normal response codes: 204
-
-Error response codes: 401
-
 Request
 -------
+
+Parameters
+~~~~~~~~~~
 
 .. rest_parameters:: parameters.yaml
 
@@ -381,6 +534,20 @@ Request
 
 Response
 --------
+
+Status Codes
+~~~~~~~~~~~~
+
+.. rest_status_code:: success ../v3/status.yaml
+
+   - 204
+
+.. rest_status_code:: error ../v3/status.yaml
+
+   - 401
+
+Example
+~~~~~~~
 
 Status: 204 No Content
 
@@ -393,12 +560,11 @@ Verifies the existence of an association between ``project_id`` and ``endpoint_g
 
 Relationship: ``https://docs.openstack.org/api/openstack-identity/3/ext/OS-EP-FILTER/1.0/rel/endpoint_group_project``
 
-Normal response codes: 200
-
-Error response codes: 401
-
 Request
 -------
+
+Parameters
+~~~~~~~~~~
 
 .. rest_parameters:: parameters.yaml
 
@@ -407,6 +573,20 @@ Request
 
 Response
 --------
+
+Status Codes
+~~~~~~~~~~~~
+
+.. rest_status_code:: success ../v3/status.yaml
+
+   - 200
+
+.. rest_status_code:: error ../v3/status.yaml
+
+   - 401
+
+Example
+~~~~~~~
 
 Status: 200 OK
 
@@ -422,12 +602,11 @@ Verifies the existence of an association between ``project_id`` and ``endpoint_g
 
 Relationship: ``https://docs.openstack.org/api/openstack-identity/3/ext/OS-EP-FILTER/1.0/rel/endpoint_group_project``
 
-Normal response codes: 200
-
-Error response codes: 401
-
 Request
 -------
+
+Parameters
+~~~~~~~~~~
 
 .. rest_parameters:: parameters.yaml
 
@@ -436,6 +615,20 @@ Request
 
 Response
 --------
+
+Status Codes
+~~~~~~~~~~~~
+
+.. rest_status_code:: success ../v3/status.yaml
+
+   - 200
+
+.. rest_status_code:: error ../v3/status.yaml
+
+   - 401
+
+Example
+~~~~~~~
 
 Status: 200 OK
 
@@ -448,12 +641,11 @@ Removes the association between ``project_id`` and ``endpoint_group_id``.
 
 Relationship: ``https://docs.openstack.org/api/openstack-identity/3/ext/OS-EP-FILTER/1.0/rel/endpoint_group_project``
 
-Normal response codes: 204
-
-Error response codes: 401
-
 Request
 -------
+
+Parameters
+~~~~~~~~~~
 
 .. rest_parameters:: parameters.yaml
 
@@ -462,6 +654,20 @@ Request
 
 Response
 --------
+
+Status Codes
+~~~~~~~~~~~~
+
+.. rest_status_code:: success ../v3/status.yaml
+
+   - 204
+
+.. rest_status_code:: error ../v3/status.yaml
+
+   - 401
+
+Example
+~~~~~~~
 
 Status: 204 No Content
 
@@ -474,12 +680,11 @@ Returns all projects that are currently associated with ``endpoint_group_id``.
 
 Relationship: ``https://docs.openstack.org/api/openstack-identity/3/ext/OS-EP-FILTER/1.0/rel/endpoint_group_projects``
 
-Normal response codes: 200
-
-Error response codes: 401
-
 Request
 -------
+
+Parameters
+~~~~~~~~~~
 
 .. rest_parameters:: parameters.yaml
 
@@ -487,6 +692,20 @@ Request
 
 Response
 --------
+
+Status Codes
+~~~~~~~~~~~~
+
+.. rest_status_code:: success ../v3/status.yaml
+
+   - 200
+
+.. rest_status_code:: error ../v3/status.yaml
+
+   - 401
+
+Example
+~~~~~~~
 
 Status: 200 OK
 
@@ -502,12 +721,11 @@ Returns all the endpoints that are currently associated with ``endpoint_group_id
 
 Relationship: ``https://docs.openstack.org/api/openstack-identity/3/ext/OS-EP-FILTER/1.0/rel/endpoint_group_endpoints``
 
-Normal response codes: 200
-
-Error response codes: 401
-
 Request
 -------
+
+Parameters
+~~~~~~~~~~
 
 .. rest_parameters:: parameters.yaml
 
@@ -515,6 +733,20 @@ Request
 
 Response
 --------
+
+Status Codes
+~~~~~~~~~~~~
+
+.. rest_status_code:: success ../v3/status.yaml
+
+   - 200
+
+.. rest_status_code:: error ../v3/status.yaml
+
+   - 401
+
+Example
+~~~~~~~
 
 Status: 200 OK
 
@@ -530,12 +762,11 @@ Returns all the endpoint groups that are currently associated with ``project_id`
 
 Relationship: ``https://docs.openstack.org/api/openstack-identity/3/ext/OS-EP-FILTER/1.0/rel/project_endpoint_groups``
 
-Normal response codes: 200
-
-Error response codes: 401
-
 Request
 -------
+
+Parameters
+~~~~~~~~~~
 
 .. rest_parameters:: parameters.yaml
 
@@ -543,6 +774,20 @@ Request
 
 Response
 --------
+
+Status Codes
+~~~~~~~~~~~~
+
+.. rest_status_code:: success ../v3/status.yaml
+
+   - 200
+
+.. rest_status_code:: error ../v3/status.yaml
+
+   - 401
+
+Example
+~~~~~~~
 
 Status: 200 OK
 

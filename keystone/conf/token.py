@@ -17,33 +17,6 @@ from oslo_log import versionutils
 
 from keystone.conf import utils
 
-
-bind = cfg.ListOpt(
-    'bind',
-    default=[],
-    help=utils.fmt("""
-This is a list of external authentication mechanisms which should add token
-binding metadata to tokens, such as `kerberos` or `x509`. Binding metadata is
-enforced according to the `[token] enforce_token_bind` option.
-"""))
-
-enforce_token_bind = cfg.StrOpt(
-    'enforce_token_bind',
-    default='permissive',
-    deprecated_since=versionutils.deprecated.PIKE,
-    deprecated_for_removal=True,
-    help=utils.fmt("""
-This controls the token binding enforcement policy on tokens presented to
-keystone with token binding metadata (as specified by the `[token] bind`
-option). `disabled` completely bypasses token binding validation. `permissive`
-and `strict` do not require tokens to have binding metadata (but will validate
-it if present), whereas `required` will always demand tokens to having binding
-metadata. `permissive` will allow unsupported binding metadata to pass through
-without validation (usually to be validated at another time by another
-component), whereas `strict` and `required` will demand that the included
-binding metadata be supported by keystone.
-"""))
-
 expiration = cfg.IntOpt(
     'expiration',
     default=3600,
@@ -53,10 +26,10 @@ expiration = cfg.IntOpt(
 The amount of time that a token should remain valid (in seconds). Drastically
 reducing this value may break "long-running" operations that involve multiple
 services to coordinate together, and will force users to authenticate with
-keystone more frequently. Drastically increasing this value will increase load
-on the `[token] driver`, as more tokens will be simultaneously valid. Keystone
-tokens are also bearer tokens, so a shorter duration will also reduce the
-potential security impact of a compromised token.
+keystone more frequently. Drastically increasing this value will increase the
+number of tokens that will be simultaneously valid. Keystone tokens are also
+bearer tokens, so a shorter duration will also reduce the potential security
+impact of a compromised token.
 """))
 
 provider = cfg.StrOpt(
@@ -65,25 +38,15 @@ provider = cfg.StrOpt(
     help=utils.fmt("""
 Entry point for the token provider in the `keystone.token.provider` namespace.
 The token provider controls the token construction, validation, and revocation
-operations. Keystone includes `fernet` and `uuid` token
-providers. `uuid` tokens must be persisted (using the backend specified in the
-`[token] driver` option), but do not require any extra configuration or setup.
-`fernet` tokens do not need to be persisted at all, but require that you run
-`keystone-manage fernet_setup` (also see the `keystone-manage fernet_rotate`
-command).
-"""))
-
-driver = cfg.StrOpt(
-    'driver',
-    default='sql',
-    deprecated_since=versionutils.deprecated.PIKE,
-    deprecated_for_removal=True,
-    help=utils.fmt("""
-Entry point for the token persistence backend driver in the
-`keystone.token.persistence` namespace. Keystone provides the `sql`
-driver.  The `sql` option (default) depends on the options in your
-`[database]` section. If you're using the `fernet` `[token] provider`, this
-backend will not be utilized to persist tokens at all.
+operations. Supported upstream providers are `fernet` and `jws`. Neither
+`fernet` or `jws` tokens require persistence and both require additional setup.
+If using `fernet`, you're required to run `keystone-manage fernet_setup`, which
+creates symmetric keys used to encrypt tokens. If using `jws`, you're required
+to generate an ECDSA keypair using a SHA-256 hash algorithm for signing and
+validating token, which can be done with `keystone-manage create_jws_keypair`.
+Note that `fernet` tokens are encrypted and `jws` tokens are only signed.
+Please be sure to consider this if your deployment has security requirements
+regarding payload contents used to generate token IDs.
 """))
 
 caching = cfg.BoolOpt(
@@ -126,22 +89,24 @@ for tokens with a more specific scope) or to provide their credentials in every
 request for a scoped token to avoid re-scoping altogether.
 """))
 
-infer_roles = cfg.BoolOpt(
-    'infer_roles',
-    default=True,
-    help=utils.fmt("""
-This controls whether roles should be included with tokens that are not
-directly assigned to the token's scope, but are instead linked implicitly to
-other role assignments.
-"""))
-
 cache_on_issue = cfg.BoolOpt(
     'cache_on_issue',
     default=True,
+    deprecated_since=versionutils.deprecated.STEIN,
+    deprecated_reason=utils.fmt("""
+Keystone already exposes a configuration option for caching tokens. Having a
+separate configuration option to cache tokens when they are issued is
+redundant, unnecessarily complicated, and is misleading if token caching is
+disabled because tokens will still be pre-cached by default when they are
+issued. The ability to pre-cache tokens when they are issued is going to rely
+exclusively on the ``keystone.conf [token] caching`` option in the future.
+"""),
+    deprecated_for_removal=True,
     help=utils.fmt("""
 Enable storing issued token data to token validation cache so that first token
 validation doesn't actually cause full validation cycle. This option has no
-effect unless global caching and token caching are enabled.
+effect unless global caching is enabled and will still cache tokens even if
+`[token] caching = False`.
 """))
 
 allow_expired_window = cfg.IntOpt(
@@ -156,16 +121,12 @@ Defaults to two days.
 
 GROUP_NAME = __name__.split('.')[-1]
 ALL_OPTS = [
-    bind,
-    enforce_token_bind,
     expiration,
     provider,
-    driver,
     caching,
     cache_time,
     revoke_by_id,
     allow_rescope_scoped_token,
-    infer_roles,
     cache_on_issue,
     allow_expired_window,
 ]

@@ -15,13 +15,6 @@ from oslo_config import cfg
 from keystone.conf import utils
 
 
-enabled = cfg.BoolOpt(
-    'enabled',
-    default=True,
-    help=utils.fmt("""
-Delegation and impersonation features using trusts can be optionally disabled.
-"""))
-
 allow_redelegation = cfg.BoolOpt(
     'allow_redelegation',
     default=False,
@@ -52,7 +45,6 @@ unless you are providing a custom entry point.
 
 GROUP_NAME = __name__.split('.')[-1]
 ALL_OPTS = [
-    enabled,
     allow_redelegation,
     max_redelegation_count,
     driver,

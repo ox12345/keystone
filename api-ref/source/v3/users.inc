@@ -103,6 +103,8 @@ Parameters
    - enabled: enabled_user_request_body
    - name: user_name_create_request_body
    - password: password_request_body
+   - extra: extra_request_body
+   - options: user_options_request_body
 
 Example
 ~~~~~~~
@@ -126,6 +128,7 @@ Parameters
    - links: links_user
    - name: user_name_response_body
    - password_expires_at: password_expires_at
+   - options: user_options_response_body
 
 Status Codes
 ~~~~~~~~~~~~
@@ -140,6 +143,12 @@ Status Codes
    - 401
    - 403
    - 409
+
+Example
+~~~~~~~
+
+.. literalinclude:: ./samples/admin/user-create-response.json
+   :language: javascript
 
 
 Show user details
@@ -204,7 +213,7 @@ Update user
 
 .. rest_method::  PATCH /v3/users/{user_id}
 
-Updates a user's password, or whether they are enabled or disabled.
+Updates a user.
 
 If the back-end driver does not support this functionality, this
 call might return the HTTP ``Not Implemented (501)`` response code.
@@ -226,6 +235,7 @@ Parameters
    - enabled: enabled_user_update_body
    - name: user_name_update_body
    - password: user_update_password_body
+   - options: user_options_request_body
 
 Example
 ~~~~~~~
@@ -249,6 +259,7 @@ Parameters
    - links: links_user
    - name: user_name_response_body
    - password_expires_at: password_expires_at
+   - options: user_options_response_body
 
 Status Codes
 ~~~~~~~~~~~~

@@ -18,6 +18,7 @@ import uuid
 from oslo_serialization import jsonutils
 from six.moves import http_client
 
+from keystone.common import provider_api
 import keystone.conf
 from keystone.credential.providers import fernet as credential_fernet
 from keystone import exception
@@ -25,17 +26,19 @@ from keystone.tests import unit
 from keystone.tests.unit import ksfixtures
 from keystone.tests.unit.ksfixtures import temporaryfile
 from keystone.tests.unit import test_v3
-from keystone.tests.unit import utils
 
 
 CONF = keystone.conf.CONF
+PROVIDERS = provider_api.ProviderAPIs
 
 
 class IdentityTestProtectedCase(test_v3.RestfulTestCase):
     """Test policy enforcement on the v3 Identity API."""
 
     def _policy_fixture(self):
-        return ksfixtures.Policy(self.tmpfilename, self.config_fixture)
+        return ksfixtures.Policy(
+            self.config_fixture, policy_file=self.tmpfilename
+        )
 
     def setUp(self):
         """Setup for Identity Protection Test Cases.
@@ -67,55 +70,64 @@ class IdentityTestProtectedCase(test_v3.RestfulTestCase):
 
         # Start by creating a couple of domains
         self.domainA = unit.new_domain_ref()
-        self.resource_api.create_domain(self.domainA['id'], self.domainA)
+        PROVIDERS.resource_api.create_domain(self.domainA['id'], self.domainA)
         self.domainB = unit.new_domain_ref()
-        self.resource_api.create_domain(self.domainB['id'], self.domainB)
+        PROVIDERS.resource_api.create_domain(self.domainB['id'], self.domainB)
         self.domainC = unit.new_domain_ref(enabled=False)
-        self.resource_api.create_domain(self.domainC['id'], self.domainC)
+        PROVIDERS.resource_api.create_domain(self.domainC['id'], self.domainC)
 
         # Some projects in the domains
         self.projectA = unit.new_project_ref(domain_id=self.domainA['id'])
-        self.resource_api.create_project(self.projectA['id'], self.projectA)
+        PROVIDERS.resource_api.create_project(
+            self.projectA['id'], self.projectA
+        )
         self.projectB = unit.new_project_ref(domain_id=self.domainB['id'])
-        self.resource_api.create_project(self.projectB['id'], self.projectB)
+        PROVIDERS.resource_api.create_project(
+            self.projectB['id'], self.projectB
+        )
 
         # Now create some users, one in domainA and two of them in domainB
-        self.user1 = unit.create_user(self.identity_api,
+        self.user1 = unit.create_user(PROVIDERS.identity_api,
                                       domain_id=self.domainA['id'])
-        self.user2 = unit.create_user(self.identity_api,
+        self.user2 = unit.create_user(PROVIDERS.identity_api,
                                       domain_id=self.domainB['id'])
-        self.user3 = unit.create_user(self.identity_api,
+        self.user3 = unit.create_user(PROVIDERS.identity_api,
                                       domain_id=self.domainB['id'])
 
         self.group1 = unit.new_group_ref(domain_id=self.domainA['id'])
-        self.group1 = self.identity_api.create_group(self.group1)
+        self.group1 = PROVIDERS.identity_api.create_group(self.group1)
 
         self.group2 = unit.new_group_ref(domain_id=self.domainA['id'])
-        self.group2 = self.identity_api.create_group(self.group2)
+        self.group2 = PROVIDERS.identity_api.create_group(self.group2)
 
         self.group3 = unit.new_group_ref(domain_id=self.domainB['id'])
-        self.group3 = self.identity_api.create_group(self.group3)
+        self.group3 = PROVIDERS.identity_api.create_group(self.group3)
 
         self.role = unit.new_role_ref()
-        self.role_api.create_role(self.role['id'], self.role)
+        PROVIDERS.role_api.create_role(self.role['id'], self.role)
         self.role1 = unit.new_role_ref()
-        self.role_api.create_role(self.role1['id'], self.role1)
+        PROVIDERS.role_api.create_role(self.role1['id'], self.role1)
 
-        self.assignment_api.create_grant(self.role['id'],
-                                         user_id=self.user1['id'],
-                                         domain_id=self.domainA['id'])
-        self.assignment_api.create_grant(self.role['id'],
-                                         user_id=self.user2['id'],
-                                         domain_id=self.domainA['id'])
-        self.assignment_api.create_grant(self.role1['id'],
-                                         user_id=self.user1['id'],
-                                         domain_id=self.domainA['id'])
-        self.assignment_api.create_grant(self.role['id'],
-                                         user_id=self.user1['id'],
-                                         project_id=self.projectA['id'])
-        self.assignment_api.create_grant(self.role['id'],
-                                         user_id=self.user2['id'],
-                                         project_id=self.projectB['id'])
+        PROVIDERS.assignment_api.create_grant(
+            self.role['id'], user_id=self.user1['id'],
+            domain_id=self.domainA['id']
+        )
+        PROVIDERS.assignment_api.create_grant(
+            self.role['id'], user_id=self.user2['id'],
+            domain_id=self.domainA['id']
+        )
+        PROVIDERS.assignment_api.create_grant(
+            self.role1['id'], user_id=self.user1['id'],
+            domain_id=self.domainA['id']
+        )
+        PROVIDERS.assignment_api.create_grant(
+            self.role['id'], user_id=self.user1['id'],
+            project_id=self.projectA['id']
+        )
+        PROVIDERS.assignment_api.create_grant(
+            self.role['id'], user_id=self.user2['id'],
+            project_id=self.projectB['id']
+        )
 
     def _get_id_list_from_ref_list(self, ref_list):
         result_list = []
@@ -230,7 +242,7 @@ class IdentityTestProtectedCase(test_v3.RestfulTestCase):
           to Domain A - this should fail
         - Retry this for a user who is in Domain A, which should succeed.
         - Finally, try getting a user that does not exist, which should
-          still return UserNotFound
+          still return ForbiddenAction
 
         """
         new_policy = {'identity:get_user':
@@ -250,7 +262,7 @@ class IdentityTestProtectedCase(test_v3.RestfulTestCase):
 
         url_by_name = '/users/%s' % uuid.uuid4().hex
         r = self.get(url_by_name, auth=self.auth,
-                     expected_status=exception.UserNotFound.code)
+                     expected_status=exception.ForbiddenAction.code)
 
     def test_revoke_grant_protected_match_target(self):
         """DELETE /domains/{id}/users/{id}/roles/{id} (match target).
@@ -388,33 +400,36 @@ class IdentityTestPolicySample(test_v3.RestfulTestCase):
         self._populate_default_domain()
 
         self.just_a_user = unit.create_user(
-            self.identity_api,
+            PROVIDERS.identity_api,
             domain_id=CONF.identity.default_domain_id)
         self.another_user = unit.create_user(
-            self.identity_api,
+            PROVIDERS.identity_api,
             domain_id=CONF.identity.default_domain_id)
         self.admin_user = unit.create_user(
-            self.identity_api,
+            PROVIDERS.identity_api,
             domain_id=CONF.identity.default_domain_id)
 
         self.role = unit.new_role_ref()
-        self.role_api.create_role(self.role['id'], self.role)
+        PROVIDERS.role_api.create_role(self.role['id'], self.role)
         self.admin_role = unit.new_role_ref(name='admin')
-        self.role_api.create_role(self.admin_role['id'], self.admin_role)
+        PROVIDERS.role_api.create_role(self.admin_role['id'], self.admin_role)
 
         # Create and assign roles to the project
         self.project = unit.new_project_ref(
             domain_id=CONF.identity.default_domain_id)
-        self.resource_api.create_project(self.project['id'], self.project)
-        self.assignment_api.create_grant(self.role['id'],
-                                         user_id=self.just_a_user['id'],
-                                         project_id=self.project['id'])
-        self.assignment_api.create_grant(self.role['id'],
-                                         user_id=self.another_user['id'],
-                                         project_id=self.project['id'])
-        self.assignment_api.create_grant(self.admin_role['id'],
-                                         user_id=self.admin_user['id'],
-                                         project_id=self.project['id'])
+        PROVIDERS.resource_api.create_project(self.project['id'], self.project)
+        PROVIDERS.assignment_api.create_grant(
+            self.role['id'], user_id=self.just_a_user['id'],
+            project_id=self.project['id']
+        )
+        PROVIDERS.assignment_api.create_grant(
+            self.role['id'], user_id=self.another_user['id'],
+            project_id=self.project['id']
+        )
+        PROVIDERS.assignment_api.create_grant(
+            self.admin_role['id'], user_id=self.admin_user['id'],
+            project_id=self.project['id']
+        )
 
     def test_user_validate_same_token(self):
         # Given a non-admin user token, the token can be used to validate
@@ -629,8 +644,10 @@ class IdentityTestv3CloudPolicySample(test_v3.RestfulTestCase,
     """Test policy enforcement of the sample v3 cloud policy file."""
 
     def _policy_fixture(self):
-        return ksfixtures.Policy(unit.dirs.etc('policy.v3cloudsample.json'),
-                                 self.config_fixture)
+        return ksfixtures.Policy(
+            self.config_fixture,
+            policy_file=unit.dirs.etc('policy.v3cloudsample.json')
+        )
 
     def setUp(self):
         """Setup for v3 Cloud Policy Sample Test Cases.
@@ -677,85 +694,95 @@ class IdentityTestv3CloudPolicySample(test_v3.RestfulTestCase,
         # Start by creating a couple of domains
         self._populate_default_domain()
         self.domainA = unit.new_domain_ref()
-        self.resource_api.create_domain(self.domainA['id'], self.domainA)
+        PROVIDERS.resource_api.create_domain(self.domainA['id'], self.domainA)
         self.domainB = unit.new_domain_ref()
-        self.resource_api.create_domain(self.domainB['id'], self.domainB)
+        PROVIDERS.resource_api.create_domain(self.domainB['id'], self.domainB)
         self.admin_domain = unit.new_domain_ref()
-        self.resource_api.create_domain(self.admin_domain['id'],
-                                        self.admin_domain)
+        PROVIDERS.resource_api.create_domain(
+            self.admin_domain['id'], self.admin_domain
+        )
 
         self.admin_project = unit.new_project_ref(
             domain_id=self.admin_domain['id'])
-        self.resource_api.create_project(self.admin_project['id'],
-                                         self.admin_project)
+        PROVIDERS.resource_api.create_project(
+            self.admin_project['id'], self.admin_project
+        )
 
         # And our users
         self.cloud_admin_user = unit.create_user(
-            self.identity_api,
+            PROVIDERS.identity_api,
             domain_id=self.admin_domain['id'])
         self.just_a_user = unit.create_user(
-            self.identity_api,
+            PROVIDERS.identity_api,
             domain_id=self.domainA['id'])
         self.domain_admin_user = unit.create_user(
-            self.identity_api,
+            PROVIDERS.identity_api,
             domain_id=self.domainA['id'])
         self.domainB_admin_user = unit.create_user(
-            self.identity_api,
+            PROVIDERS.identity_api,
             domain_id=self.domainB['id'])
         self.project_admin_user = unit.create_user(
-            self.identity_api,
+            PROVIDERS.identity_api,
             domain_id=self.domainA['id'])
         self.project_adminB_user = unit.create_user(
-            self.identity_api,
+            PROVIDERS.identity_api,
             domain_id=self.domainB['id'])
 
         # The admin role, a domain specific role and another plain role
         self.admin_role = unit.new_role_ref(name='admin')
-        self.role_api.create_role(self.admin_role['id'], self.admin_role)
+        PROVIDERS.role_api.create_role(self.admin_role['id'], self.admin_role)
         self.roleA = unit.new_role_ref(domain_id=self.domainA['id'])
-        self.role_api.create_role(self.roleA['id'], self.roleA)
+        PROVIDERS.role_api.create_role(self.roleA['id'], self.roleA)
         self.role = unit.new_role_ref()
-        self.role_api.create_role(self.role['id'], self.role)
+        PROVIDERS.role_api.create_role(self.role['id'], self.role)
 
         # The cloud admin just gets the admin role on the special admin project
-        self.assignment_api.create_grant(self.admin_role['id'],
-                                         user_id=self.cloud_admin_user['id'],
-                                         project_id=self.admin_project['id'])
+        PROVIDERS.assignment_api.create_grant(
+            self.admin_role['id'], user_id=self.cloud_admin_user['id'],
+            project_id=self.admin_project['id']
+        )
 
         # Assign roles to the domain
-        self.assignment_api.create_grant(self.admin_role['id'],
-                                         user_id=self.domain_admin_user['id'],
-                                         domain_id=self.domainA['id'])
-        self.assignment_api.create_grant(self.role['id'],
-                                         user_id=self.just_a_user['id'],
-                                         domain_id=self.domainA['id'])
-        self.assignment_api.create_grant(self.admin_role['id'],
-                                         user_id=self.domainB_admin_user['id'],
-                                         domain_id=self.domainB['id'])
+        PROVIDERS.assignment_api.create_grant(
+            self.admin_role['id'], user_id=self.domain_admin_user['id'],
+            domain_id=self.domainA['id']
+        )
+        PROVIDERS.assignment_api.create_grant(
+            self.role['id'], user_id=self.just_a_user['id'],
+            domain_id=self.domainA['id']
+        )
+        PROVIDERS.assignment_api.create_grant(
+            self.admin_role['id'], user_id=self.domainB_admin_user['id'],
+            domain_id=self.domainB['id']
+        )
 
         # Create and assign roles to the project
         self.project = unit.new_project_ref(domain_id=self.domainA['id'])
-        self.resource_api.create_project(self.project['id'], self.project)
+        PROVIDERS.resource_api.create_project(self.project['id'], self.project)
         self.projectB = unit.new_project_ref(domain_id=self.domainB['id'])
-        self.resource_api.create_project(self.projectB['id'], self.projectB)
-        self.assignment_api.create_grant(self.admin_role['id'],
-                                         user_id=self.project_admin_user['id'],
-                                         project_id=self.project['id'])
-        self.assignment_api.create_grant(
+        PROVIDERS.resource_api.create_project(
+            self.projectB['id'], self.projectB
+        )
+        PROVIDERS.assignment_api.create_grant(
+            self.admin_role['id'], user_id=self.project_admin_user['id'],
+            project_id=self.project['id']
+        )
+        PROVIDERS.assignment_api.create_grant(
             self.admin_role['id'], user_id=self.project_adminB_user['id'],
             project_id=self.projectB['id'])
-        self.assignment_api.create_grant(self.role['id'],
-                                         user_id=self.just_a_user['id'],
-                                         project_id=self.project['id'])
+        PROVIDERS.assignment_api.create_grant(
+            self.role['id'], user_id=self.just_a_user['id'],
+            project_id=self.project['id']
+        )
 
         self.group1 = unit.new_group_ref(domain_id=self.domainA['id'])
-        self.group1 = self.identity_api.create_group(self.group1)
+        self.group1 = PROVIDERS.identity_api.create_group(self.group1)
 
         self.group2 = unit.new_group_ref(domain_id=self.domainA['id'])
-        self.group2 = self.identity_api.create_group(self.group2)
+        self.group2 = PROVIDERS.identity_api.create_group(self.group2)
 
         self.group3 = unit.new_group_ref(domain_id=self.domainB['id'])
-        self.group3 = self.identity_api.create_group(self.group3)
+        self.group3 = PROVIDERS.identity_api.create_group(self.group3)
 
     def _stati(self, expected_status):
         # Return the expected return codes for APIs with and without data
@@ -765,25 +792,6 @@ class IdentityTestv3CloudPolicySample(test_v3.RestfulTestCase,
                     http_client.NO_CONTENT)
         else:
             return (expected_status, expected_status, expected_status)
-
-    def _test_user_management(self, user_id, domain_id, expected=None):
-        status_OK, status_created, status_no_data = self._stati(expected)
-        entity_url = '/users/%s' % user_id
-        list_url = '/users?domain_id=%s' % domain_id
-
-        self.get(entity_url, auth=self.auth,
-                 expected_status=status_OK)
-        self.get(list_url, auth=self.auth,
-                 expected_status=status_OK)
-        user = {'description': 'Updated'}
-        self.patch(entity_url, auth=self.auth, body={'user': user},
-                   expected_status=status_OK)
-        self.delete(entity_url, auth=self.auth,
-                    expected_status=status_no_data)
-
-        user_ref = unit.new_user_ref(domain_id=domain_id)
-        self.post('/users', auth=self.auth, body={'user': user_ref},
-                  expected_status=status_created)
 
     def _test_group_management(self, group, expected=None):
         status_OK, status_created, status_no_data = self._stati(expected)
@@ -831,30 +839,11 @@ class IdentityTestv3CloudPolicySample(test_v3.RestfulTestCase,
         self.post('/projects', auth=self.auth, body={'project': proj_ref},
                   expected_status=status_created)
 
-    def _test_domain_management(self, expected=None):
-        status_OK, status_created, status_no_data = self._stati(expected)
-        entity_url = '/domains/%s' % self.domainB['id']
-        list_url = '/domains'
-
-        self.get(entity_url, auth=self.auth,
-                 expected_status=status_OK)
-        self.get(list_url, auth=self.auth,
-                 expected_status=status_OK)
-        domain = {'description': 'Updated', 'enabled': False}
-        self.patch(entity_url, auth=self.auth, body={'domain': domain},
-                   expected_status=status_OK)
-        self.delete(entity_url, auth=self.auth,
-                    expected_status=status_no_data)
-
-        domain_ref = unit.new_domain_ref()
-        self.post('/domains', auth=self.auth, body={'domain': domain_ref},
-                  expected_status=status_created)
-
     def _test_grants(self, target, entity_id, role_domain_id=None,
                      list_status_OK=False, expected=None):
         status_OK, status_created, status_no_data = self._stati(expected)
         a_role = unit.new_role_ref(domain_id=role_domain_id)
-        self.role_api.create_role(a_role['id'], a_role)
+        PROVIDERS.role_api.create_role(a_role['id'], a_role)
 
         collection_url = (
             '/%(target)s/%(target_id)s/users/%(user_id)s/roles' % {
@@ -929,138 +918,6 @@ class IdentityTestv3CloudPolicySample(test_v3.RestfulTestCase,
         role_ref = unit.new_role_ref(domain_id=domain_id)
         self.post('/roles', auth=self.auth, body={'role': role_ref},
                   expected_status=status_created)
-
-    def test_user_management(self):
-        # First, authenticate with a user that does not have the domain
-        # admin role - shouldn't be able to do much.
-        self.auth = self.build_authentication_request(
-            user_id=self.just_a_user['id'],
-            password=self.just_a_user['password'],
-            domain_id=self.domainA['id'])
-
-        self._test_user_management(
-            self.domain_admin_user['id'], self.domainA['id'],
-            expected=exception.ForbiddenAction.code)
-
-        # Now, authenticate with a user that does have the domain admin role
-        self.auth = self.build_authentication_request(
-            user_id=self.domain_admin_user['id'],
-            password=self.domain_admin_user['password'],
-            domain_id=self.domainA['id'])
-
-        self._test_user_management(self.just_a_user['id'], self.domainA['id'])
-
-    def test_user_management_normalized_keys(self):
-        """Illustrate the inconsistent handling of hyphens in keys.
-
-        To quote Morgan in bug 1526244:
-
-            the reason this is converted from "domain-id" to "domain_id" is
-            because of how we process/normalize data. The way we have to handle
-            specific data types for known columns requires avoiding "-" in the
-            actual python code since "-" is not valid for attributes in python
-            w/o significant use of "getattr" etc.
-
-            In short, historically we handle some things in conversions. The
-            use of "extras" has long been a poor design choice that leads to
-            odd/strange inconsistent behaviors because of other choices made in
-            handling data from within the body. (In many cases we convert from
-            "-" to "_" throughout openstack)
-
-        Source: https://bugs.launchpad.net/keystone/+bug/1526244/comments/9
-
-        """
-        # Authenticate with a user that has the domain admin role
-        self.auth = self.build_authentication_request(
-            user_id=self.domain_admin_user['id'],
-            password=self.domain_admin_user['password'],
-            domain_id=self.domainA['id'])
-
-        # Show that we can read a normal user without any surprises.
-        r = self.get(
-            '/users/%s' % self.just_a_user['id'],
-            auth=self.auth,
-            expected_status=http_client.OK)
-        self.assertValidUserResponse(r)
-
-        # We don't normalize query string keys, so both of these result in a
-        # 403, because we didn't specify a domain_id query string in either
-        # case, and we explicitly require one (it doesn't matter what
-        # 'domain-id' value you use).
-        self.get(
-            '/users?domain-id=%s' % self.domainA['id'],
-            auth=self.auth,
-            expected_status=exception.ForbiddenAction.code)
-        self.get(
-            '/users?domain-id=%s' % self.domainB['id'],
-            auth=self.auth,
-            expected_status=exception.ForbiddenAction.code)
-
-        # If we try updating the user's 'domain_id' by specifying a
-        # 'domain-id', then it'll be stored into extras rather than normalized,
-        # and the user's actual 'domain_id' is not affected.
-        r = self.patch(
-            '/users/%s' % self.just_a_user['id'],
-            auth=self.auth,
-            body={'user': {'domain-id': self.domainB['id']}},
-            expected_status=http_client.OK)
-        self.assertEqual(self.domainB['id'], r.json['user']['domain-id'])
-        self.assertEqual(self.domainA['id'], r.json['user']['domain_id'])
-        self.assertNotEqual(self.domainB['id'], self.just_a_user['domain_id'])
-        self.assertValidUserResponse(r, self.just_a_user)
-
-        # Finally, show that we can create a new user without any surprises.
-        # But if we specify a 'domain-id' instead of a 'domain_id', we get a
-        # Forbidden response because we fail a policy check before
-        # normalization occurs.
-        user_ref = unit.new_user_ref(domain_id=self.domainA['id'])
-        r = self.post(
-            '/users',
-            auth=self.auth,
-            body={'user': user_ref},
-            expected_status=http_client.CREATED)
-        self.assertValidUserResponse(r, ref=user_ref)
-        user_ref['domain-id'] = user_ref.pop('domain_id')
-        self.post(
-            '/users',
-            auth=self.auth,
-            body={'user': user_ref},
-            expected_status=exception.ForbiddenAction.code)
-
-    def test_user_management_by_cloud_admin(self):
-        # Test users management with a cloud admin. This user should
-        # be able to manage users in any domain.
-        self.auth = self.build_authentication_request(
-            user_id=self.cloud_admin_user['id'],
-            password=self.cloud_admin_user['password'],
-            project_id=self.admin_project['id'])
-
-        self._test_user_management(self.just_a_user['id'], self.domainA['id'])
-
-    def test_group_management(self):
-        # First, authenticate with a user that does not have the domain
-        # admin role - shouldn't be able to do much.
-        self.auth = self.build_authentication_request(
-            user_id=self.just_a_user['id'],
-            password=self.just_a_user['password'],
-            domain_id=self.domainA['id'])
-
-        self._test_group_management(
-            self.group1, expected=exception.ForbiddenAction.code)
-
-        # ...but should be able to list groups of which they are a member
-        url = '/users/%s/groups' % self.just_a_user['id']
-        self.get(url, auth=self.auth)
-
-        # Now, authenticate with a user that does have the domain admin role
-        self.auth = self.build_authentication_request(
-            user_id=self.domain_admin_user['id'],
-            password=self.domain_admin_user['password'],
-            domain_id=self.domainA['id'])
-
-        self._test_group_management(self.group1)
-        self._test_group_management(self.group3,
-                                    expected=exception.ForbiddenAction.code)
 
     def test_group_management_by_cloud_admin(self):
         # Test groups management with a cloud admin. This user should
@@ -1329,8 +1186,8 @@ class IdentityTestv3CloudPolicySample(test_v3.RestfulTestCase,
 
         collection_url = self.build_role_assignment_query_url(
             domain_id=self.domainB['id'])
-        self.get(collection_url, auth=self.auth,
-                 expected_status=http_client.FORBIDDEN)
+        r = self.get(collection_url, auth=self.auth)
+        self.assertEqual([], r.json_body['role_assignments'])
 
     def test_domain_user_list_assignments_of_domain_failed(self):
         self.auth = self.build_authentication_request(
@@ -1395,54 +1252,15 @@ class IdentityTestv3CloudPolicySample(test_v3.RestfulTestCase,
         self.assertRoleAssignmentInListResponse(r, project_admin_entity)
         self.assertRoleAssignmentInListResponse(r, project_user_entity)
 
-    def test_project_admin_list_assignments_of_another_project_failed(self):
-        projectB = unit.new_project_ref(domain_id=self.domainA['id'])
-        self.resource_api.create_project(projectB['id'], projectB)
-        admin_auth = self.build_authentication_request(
-            user_id=self.project_admin_user['id'],
-            password=self.project_admin_user['password'],
-            project_id=self.project['id'])
-
-        collection_url = self.build_role_assignment_query_url(
-            project_id=projectB['id'])
-        self.get(collection_url, auth=admin_auth,
-                 expected_status=exception.ForbiddenAction.code)
-
-    @utils.wip('waiting on bug #1437407')
-    def test_domain_admin_list_assignments_of_project(self):
-        self.auth = self.build_authentication_request(
-            user_id=self.domain_admin_user['id'],
-            password=self.domain_admin_user['password'],
-            domain_id=self.domainA['id'])
-
-        collection_url = self.build_role_assignment_query_url(
-            project_id=self.project['id'])
-        r = self.get(collection_url, auth=self.auth)
-        self.assertValidRoleAssignmentListResponse(
-            r, expected_length=2, resource_url=collection_url)
-
-        project_admin_entity = self.build_role_assignment_entity(
-            project_id=self.project['id'],
-            user_id=self.project_admin_user['id'],
-            role_id=self.admin_role['id'],
-            inherited_to_projects=False)
-        project_user_entity = self.build_role_assignment_entity(
-            project_id=self.project['id'],
-            user_id=self.just_a_user['id'],
-            role_id=self.role['id'],
-            inherited_to_projects=False)
-
-        self.assertRoleAssignmentInListResponse(r, project_admin_entity)
-        self.assertRoleAssignmentInListResponse(r, project_user_entity)
-
     def test_domain_admin_list_assignment_tree(self):
         # Add a child project to the standard test data
         sub_project = unit.new_project_ref(domain_id=self.domainA['id'],
                                            parent_id=self.project['id'])
-        self.resource_api.create_project(sub_project['id'], sub_project)
-        self.assignment_api.create_grant(self.role['id'],
-                                         user_id=self.just_a_user['id'],
-                                         project_id=sub_project['id'])
+        PROVIDERS.resource_api.create_project(sub_project['id'], sub_project)
+        PROVIDERS.assignment_api.create_grant(
+            self.role['id'], user_id=self.just_a_user['id'],
+            project_id=sub_project['id']
+        )
 
         collection_url = self.build_role_assignment_query_url(
             project_id=self.project['id'])
@@ -1469,11 +1287,12 @@ class IdentityTestv3CloudPolicySample(test_v3.RestfulTestCase,
 
         # A neither should a domain admin from a different domain
         domainB_admin_user = unit.create_user(
-            self.identity_api,
+            PROVIDERS.identity_api,
             domain_id=self.domainB['id'])
-        self.assignment_api.create_grant(self.admin_role['id'],
-                                         user_id=domainB_admin_user['id'],
-                                         domain_id=self.domainB['id'])
+        PROVIDERS.assignment_api.create_grant(
+            self.admin_role['id'], user_id=domainB_admin_user['id'],
+            domain_id=self.domainB['id']
+        )
         auth = self.build_authentication_request(
             user_id=domainB_admin_user['id'],
             password=domainB_admin_user['password'],
@@ -1493,38 +1312,6 @@ class IdentityTestv3CloudPolicySample(test_v3.RestfulTestCase,
         self.get(collection_url, auth=self.auth,
                  expected_status=http_client.FORBIDDEN)
 
-    def test_cloud_admin(self):
-        self.auth = self.build_authentication_request(
-            user_id=self.domain_admin_user['id'],
-            password=self.domain_admin_user['password'],
-            domain_id=self.domainA['id'])
-
-        self._test_domain_management(
-            expected=exception.ForbiddenAction.code)
-
-        self.auth = self.build_authentication_request(
-            user_id=self.cloud_admin_user['id'],
-            password=self.cloud_admin_user['password'],
-            project_id=self.admin_project['id'])
-
-        self._test_domain_management()
-
-    def test_admin_project(self):
-        self.auth = self.build_authentication_request(
-            user_id=self.project_admin_user['id'],
-            password=self.project_admin_user['password'],
-            project_id=self.project['id'])
-
-        self._test_domain_management(
-            expected=exception.ForbiddenAction.code)
-
-        self.auth = self.build_authentication_request(
-            user_id=self.cloud_admin_user['id'],
-            password=self.cloud_admin_user['password'],
-            project_id=self.admin_project['id'])
-
-        self._test_domain_management()
-
     def test_domain_admin_get_domain(self):
         self.auth = self.build_authentication_request(
             user_id=self.domain_admin_user['id'],
@@ -1533,29 +1320,9 @@ class IdentityTestv3CloudPolicySample(test_v3.RestfulTestCase,
         entity_url = '/domains/%s' % self.domainA['id']
         self.get(entity_url, auth=self.auth)
 
-    def test_list_user_credentials(self):
-        credential_user = unit.new_credential_ref(self.just_a_user['id'])
-        self.credential_api.create_credential(credential_user['id'],
-                                              credential_user)
-        credential_admin = unit.new_credential_ref(self.cloud_admin_user['id'])
-        self.credential_api.create_credential(credential_admin['id'],
-                                              credential_admin)
-
-        self.auth = self.build_authentication_request(
-            user_id=self.just_a_user['id'],
-            password=self.just_a_user['password'])
-        url = '/credentials?user_id=%s' % self.just_a_user['id']
-        self.get(url, auth=self.auth)
-        url = '/credentials?user_id=%s' % self.cloud_admin_user['id']
-        self.get(url, auth=self.auth,
-                 expected_status=exception.ForbiddenAction.code)
-        url = '/credentials'
-        self.get(url, auth=self.auth,
-                 expected_status=exception.ForbiddenAction.code)
-
     def test_get_and_delete_ec2_credentials(self):
         """Test getting and deleting ec2 credentials through the ec2 API."""
-        another_user = unit.create_user(self.identity_api,
+        another_user = unit.create_user(PROVIDERS.identity_api,
                                         domain_id=self.domainA['id'])
 
         # create a credential for just_a_user
@@ -1826,7 +1593,7 @@ class IdentityTestv3CloudPolicySample(test_v3.RestfulTestCase,
         # Test user can not get project for one they don't have a role in,
         # even if they have a role on another project
         project2 = unit.new_project_ref(domain_id=self.domainA['id'])
-        self.resource_api.create_project(project2['id'], project2)
+        PROVIDERS.resource_api.create_project(project2['id'], project2)
         self.get('/projects/%s' % project2['id'], auth=user_auth,
                  expected_status=exception.ForbiddenAction.code)
 
@@ -1856,28 +1623,6 @@ class IdentityTestv3CloudPolicySample(test_v3.RestfulTestCase,
             project_id=self.project['id'])
 
         self._role_management_cases(expected=exception.ForbiddenAction.code)
-
-    def test_role_management_with_project_admin(self):
-        # A project admin user should be able to get and list, but not be able
-        # to create/update/delete global roles
-        self.auth = self.build_authentication_request(
-            user_id=self.project_admin_user['id'],
-            password=self.project_admin_user['password'],
-            project_id=self.project['id'])
-
-        self._role_management_cases(read_status_OK=True,
-                                    expected=exception.ForbiddenAction.code)
-
-    def test_role_management_with_domain_admin(self):
-        # A domain admin user should be able to get and list, but not be able
-        # to create/update/delete global roles
-        self.auth = self.build_authentication_request(
-            user_id=self.domain_admin_user['id'],
-            password=self.domain_admin_user['password'],
-            domain_id=self.domainA['id'])
-
-        self._role_management_cases(read_status_OK=True,
-                                    expected=exception.ForbiddenAction.code)
 
     def test_role_management_with_cloud_admin(self):
         # A cloud admin user should have rights to manipulate global roles
@@ -1974,14 +1719,19 @@ class IdentityTestImpliedDomainSpecificRoles(IdentityTestv3CloudPolicySample):
         self.admin_token = self.get_requested_token(domain_admin_auth)
 
         self.appdev_role = unit.new_role_ref(domain_id=self.domainA['id'])
-        self.role_api.create_role(self.appdev_role['id'], self.appdev_role)
+        PROVIDERS.role_api.create_role(
+            self.appdev_role['id'], self.appdev_role
+        )
 
         self.appadmin_role = unit.new_role_ref(domain_id=self.domainA['id'])
-        self.role_api.create_role(self.appadmin_role['id'], self.appadmin_role)
+        PROVIDERS.role_api.create_role(
+            self.appadmin_role['id'], self.appadmin_role
+        )
 
     def _create_implied_role(self):
-        self.role_api.create_implied_role(self.appadmin_role['id'],
-                                          self.appdev_role['id'])
+        PROVIDERS.role_api.create_implied_role(
+            self.appadmin_role['id'], self.appdev_role['id']
+        )
 
     def test_get(self):
         # A domain admin should be able to get an existing implied role
@@ -2028,10 +1778,10 @@ class IdentityTestImpliedDomainSpecificRoles(IdentityTestv3CloudPolicySample):
 
     def test_forbidden_role_implication_from_different_domain(self):
         domain2 = unit.new_domain_ref(domain_id=uuid.uuid4().hex)
-        self.resource_api.create_domain(domain2['id'], domain2)
+        PROVIDERS.resource_api.create_domain(domain2['id'], domain2)
 
         role2 = unit.new_role_ref(domain_id=domain2['id'])
-        implied = self.role_api.create_role(role2['id'], role2)
+        implied = PROVIDERS.role_api.create_role(role2['id'], role2)
 
         self.put('/roles/%s/implies/%s'
                  % (self.appdev_role['id'], implied['id']),
@@ -2045,10 +1795,10 @@ class IdentityTestImpliedDomainSpecificRoles(IdentityTestv3CloudPolicySample):
             project_id=self.admin_project['id'])
 
         domain2 = unit.new_domain_ref(domain_id=uuid.uuid4().hex)
-        self.resource_api.create_domain(domain2['id'], domain2)
+        PROVIDERS.resource_api.create_domain(domain2['id'], domain2)
 
         role2 = unit.new_role_ref(domain_id=domain2['id'])
-        implied = self.role_api.create_role(role2['id'], role2)
+        implied = PROVIDERS.role_api.create_role(role2['id'], role2)
 
         self.put('/roles/%s/implies/%s'
                  % (self.appdev_role['id'], implied['id']),

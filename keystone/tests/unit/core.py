@@ -15,6 +15,7 @@
 from __future__ import absolute_import
 import atexit
 import base64
+import contextlib
 import datetime
 import functools
 import hashlib
@@ -28,29 +29,33 @@ import uuid
 import warnings
 
 import fixtures
+import flask
+from flask import testing as flask_testing
 from oslo_config import fixture as config_fixture
 from oslo_context import context as oslo_context
 from oslo_context import fixture as oslo_ctx_fixture
 from oslo_log import fixture as log_fixture
 from oslo_log import log
 from oslo_utils import timeutils
-from paste.deploy import loadwsgi
 import six
+from six.moves import http_client
 from sqlalchemy import exc
 import testtools
 from testtools import testcase
 
+import keystone.api
 from keystone.common import context
-from keystone.common import dependency
-from keystone.common import request
+from keystone.common import json_home
+from keystone.common import provider_api
 from keystone.common import sql
 import keystone.conf
 from keystone import exception
 from keystone.identity.backends.ldap import common as ks_ldap
 from keystone import notifications
+from keystone.resource.backends import base as resource_base
+from keystone.server.flask import application as flask_app
+from keystone.server.flask import core as keystone_flask
 from keystone.tests.unit import ksfixtures
-from keystone.version import controllers
-from keystone.version import service
 
 
 keystone.conf.configure()
@@ -74,6 +79,7 @@ def _calc_tmpdir():
 TMPDIR = _calc_tmpdir()
 
 CONF = keystone.conf.CONF
+PROVIDERS = provider_api.ProviderAPIs
 log.register_options(CONF)
 
 IN_MEM_DB_CONN_STRING = 'sqlite://'
@@ -108,26 +114,6 @@ class dirs(object):
     @staticmethod
     def tests_conf(*p):
         return os.path.join(TESTCONF, *p)
-
-
-class EggLoader(loadwsgi.EggLoader):
-    _basket = {}
-
-    def find_egg_entry_point(self, object_type, name=None):
-        egg_key = '%s:%s' % (object_type, name)
-        egg_ep = self._basket.get(egg_key)
-        if not egg_ep:
-            egg_ep = super(EggLoader, self).find_egg_entry_point(
-                object_type, name=name)
-            self._basket[egg_key] = egg_ep
-        return egg_ep
-
-
-# NOTE(dstanek): class paths were removed from the keystone-paste.ini in
-# favor of using entry points. This caused tests to slow to a crawl
-# since we reload the application object for each RESTful test. This
-# monkey-patching adds caching to paste deploy's egg lookup.
-loadwsgi.EggLoader = EggLoader
 
 
 @atexit.register
@@ -324,6 +310,47 @@ def new_federated_user_ref(idp_id=None, protocol_id=None, **kwargs):
     return ref
 
 
+def new_mapping_ref(mapping_id=None, rules=None, **kwargs):
+    ref = {
+        'id': mapping_id or uuid.uuid4().hex,
+        'rules': rules or []
+    }
+    ref.update(kwargs)
+    return ref
+
+
+def new_protocol_ref(protocol_id=None, idp_id=None, mapping_id=None, **kwargs):
+    ref = {
+        'id': protocol_id or 'saml2',
+        'idp_id': idp_id or 'ORG_IDP',
+        'mapping_id': mapping_id or uuid.uuid4().hex
+    }
+    ref.update(kwargs)
+    return ref
+
+
+def new_identity_provider_ref(idp_id=None, **kwargs):
+    ref = {
+        'id': idp_id or 'ORG_IDP',
+        'enabled': True,
+        'description': '',
+    }
+    ref.update(kwargs)
+    return ref
+
+
+def new_service_provider_ref(**kwargs):
+    ref = {
+        'auth_url': 'https://' + uuid.uuid4().hex + '.com',
+        'enabled': True,
+        'description': uuid.uuid4().hex,
+        'sp_url': 'https://' + uuid.uuid4().hex + '.com',
+        'relay_state_prefix': CONF.saml.relay_state_prefix
+    }
+    ref.update(kwargs)
+    return ref
+
+
 def new_group_ref(domain_id, **kwargs):
     ref = {
         'id': uuid.uuid4().hex,
@@ -395,10 +422,39 @@ def new_totp_credential(user_id, project_id=None, blob=None):
     return credential
 
 
+def new_application_credential_ref(roles=None,
+                                   name=None,
+                                   expires=None,
+                                   secret=None):
+    ref = {
+        'id': uuid.uuid4().hex,
+        'name': uuid.uuid4().hex,
+        'description': uuid.uuid4().hex,
+    }
+    if roles:
+        ref['roles'] = roles
+    if secret:
+        ref['secret'] = secret
+
+    if isinstance(expires, six.string_types):
+        ref['expires_at'] = expires
+    elif isinstance(expires, dict):
+        ref['expires_at'] = (
+            timeutils.utcnow() + datetime.timedelta(**expires)
+        ).strftime(TIME_FORMAT)
+    elif expires is None:
+        pass
+    else:
+        raise NotImplementedError('Unexpected value for "expires"')
+
+    return ref
+
+
 def new_role_ref(**kwargs):
     ref = {
         'id': uuid.uuid4().hex,
         'name': uuid.uuid4().hex,
+        'description': uuid.uuid4().hex,
         'domain_id': None
     }
     ref.update(kwargs)
@@ -461,6 +517,30 @@ def new_trust_ref(trustor_user_id, trustee_user_id, project_id=None,
     return ref
 
 
+def new_registered_limit_ref(**kwargs):
+    ref = {
+        'service_id': uuid.uuid4().hex,
+        'resource_name': uuid.uuid4().hex,
+        'default_limit': 10,
+        'description': uuid.uuid4().hex
+    }
+
+    ref.update(kwargs)
+    return ref
+
+
+def new_limit_ref(**kwargs):
+    ref = {
+        'service_id': uuid.uuid4().hex,
+        'resource_name': uuid.uuid4().hex,
+        'resource_limit': 10,
+        'description': uuid.uuid4().hex
+    }
+
+    ref.update(kwargs)
+    return ref
+
+
 def create_user(api, domain_id, **kwargs):
     """Create a user via the API. Keep the created password.
 
@@ -473,6 +553,86 @@ def create_user(api, domain_id, **kwargs):
     user = api.create_user(user)
     user['password'] = password
     return user
+
+
+def _assert_expected_status(f):
+    """Add `expected_status_code` as an argument to the test_client methods.
+
+    `expected_status_code` must be passed as a kwarg.
+    """
+    TEAPOT_HTTP_STATUS = 418
+
+    _default_expected_responses = {
+        'get': http_client.OK,
+        'head': http_client.OK,
+        'post': http_client.CREATED,
+        'put': http_client.NO_CONTENT,
+        'patch': http_client.OK,
+        'delete': http_client.NO_CONTENT,
+    }
+
+    @functools.wraps(f)
+    def inner(*args, **kwargs):
+        # Get the "expected_status_code" kwarg if supplied. If not supplied use
+        # the `_default_expected_response` mapping, or fall through to
+        # "HTTP OK" if the method is somehow unknown.
+        expected_status_code = kwargs.pop(
+            'expected_status_code',
+            _default_expected_responses.get(
+                f.__name__.lower(), http_client.OK))
+        response = f(*args, **kwargs)
+
+        # Logic to verify the response object is sane. Expand as needed
+        if response.status_code == TEAPOT_HTTP_STATUS:
+            # NOTE(morgan): We use 418 internally during tests to indicate
+            # an un-routed HTTP call was made. This allows us to avoid
+            # misinterpreting HTTP 404 from Flask and HTTP 404 from a
+            # resource that is not found (e.g. USER NOT FOUND) programmatically
+            raise AssertionError("I AM A TEAPOT(418): %s" % response.data)
+
+        if response.status_code != expected_status_code:
+            raise AssertionError(
+                'Expected HTTP Status does not match observed HTTP '
+                'Status: %(expected)s != %(observed)s (%(data)s)' % {
+                    'expected': expected_status_code,
+                    'observed': response.status_code,
+                    'data': response.data})
+
+        # return the original response object
+        return response
+    return inner
+
+
+class KeystoneFlaskTestClient(flask_testing.FlaskClient):
+    """Subclass of flask.testing.FlaskClient implementing assertions.
+
+    Implements custom "expected" HTTP Status assertion for
+    GET/HEAD/PUT/PATCH/DELETE.
+    """
+
+    @_assert_expected_status
+    def get(self, *args, **kwargs):
+        return super(KeystoneFlaskTestClient, self).get(*args, **kwargs)
+
+    @_assert_expected_status
+    def head(self, *args, **kwargs):
+        return super(KeystoneFlaskTestClient, self).head(*args, **kwargs)
+
+    @_assert_expected_status
+    def post(self, *args, **kwargs):
+        return super(KeystoneFlaskTestClient, self).post(*args, **kwargs)
+
+    @_assert_expected_status
+    def patch(self, *args, **kwargs):
+        return super(KeystoneFlaskTestClient, self).patch(*args, **kwargs)
+
+    @_assert_expected_status
+    def put(self, *args, **kwargs):
+        return super(KeystoneFlaskTestClient, self).put(*args, **kwargs)
+
+    @_assert_expected_status
+    def delete(self, *args, **kwargs):
+        return super(KeystoneFlaskTestClient, self).delete(*args, **kwargs)
 
 
 class BaseTestCase(testtools.TestCase):
@@ -554,6 +714,29 @@ class BaseTestCase(testtools.TestCase):
                 return True
         return False
 
+    def loadapp(self, name='public'):
+        app = flask_app.application_factory(name)
+        app.testing = True
+        app.test_client_class = KeystoneFlaskTestClient
+
+        # NOTE(morgan): any unexpected 404s, not handled by the routed apis,
+        # is a hard error and should not pass testing.
+        def page_not_found_teapot(e):
+            content = (
+                'TEST PROGRAMMING ERROR - Reached a 404 from an unrouted (`%s`'
+                ') path. Be sure the test is requesting the right resource '
+                'and that all blueprints are registered with the flask app.' %
+                flask.request.url)
+            return content, 418
+
+        app.register_error_handler(404, page_not_found_teapot)
+
+        self.test_client = app.test_client
+        self.test_request_context = app.test_request_context
+        self.cleanup_instance('test_request_context')
+        self.cleanup_instance('test_client')
+        return keystone_flask.setup_app_middleware(app)
+
 
 class TestCase(BaseTestCase):
 
@@ -561,21 +744,29 @@ class TestCase(BaseTestCase):
         return []
 
     def _policy_fixture(self):
-        return ksfixtures.Policy(dirs.etc('policy.json'), self.config_fixture)
+        return ksfixtures.Policy(self.config_fixture)
 
+    @contextlib.contextmanager
     def make_request(self, path='/', **kwargs):
+        # standup a fake app and request context with a passed in/known
+        # environment.
+
         is_admin = kwargs.pop('is_admin', False)
         environ = kwargs.setdefault('environ', {})
+        query_string = kwargs.pop('query_string', None)
+        if query_string:
+            # Make sure query string is properly added to the context
+            path = '{path}?{qs}'.format(path=path, qs=query_string)
 
         if not environ.get(context.REQUEST_CONTEXT_ENV):
             environ[context.REQUEST_CONTEXT_ENV] = context.RequestContext(
                 is_admin=is_admin,
                 authenticated=kwargs.pop('authenticated', True))
 
-        req = request.Request.blank(path=path, **kwargs)
-        req.context_dict['is_admin'] = is_admin
-
-        return req
+        # Create a dummy flask app to work with
+        app = flask.Flask(__name__)
+        with app.test_request_context(path=path, environ_overrides=environ):
+            yield
 
     def config_overrides(self):
         # NOTE(morganfainberg): enforce config_overrides can only ever be
@@ -600,10 +791,6 @@ class TestCase(BaseTestCase):
             driver='sql',
             template_file=dirs.tests('default_catalog.templates'))
         self.config_fixture.config(
-            group='signing', certfile=signing_certfile,
-            keyfile=signing_keyfile,
-            ca_certs='examples/pki/certs/cacert.pem')
-        self.config_fixture.config(
             group='saml', certfile=signing_certfile, keyfile=signing_keyfile)
         self.config_fixture.config(
             default_log_levels=[
@@ -627,13 +814,20 @@ class TestCase(BaseTestCase):
         # of hashing has been used. Note that 4 is the lowest for bcrypt
         # allowed in the `[identity] password_hash_rounds` setting
         self.config_fixture.config(group='identity', password_hash_rounds=4)
-        self.config_fixture.config(crypt_strength=1000)
 
         self.useFixture(
             ksfixtures.KeyRepository(
                 self.config_fixture,
                 'fernet_tokens',
                 CONF.fernet_tokens.max_active_keys
+            )
+        )
+
+        self.useFixture(
+            ksfixtures.KeyRepository(
+                self.config_fixture,
+                'fernet_receipts',
+                CONF.fernet_receipts.max_active_keys
             )
         )
 
@@ -658,6 +852,8 @@ class TestCase(BaseTestCase):
             new=mocked_register_auth_plugin_opt))
 
         self.config_overrides()
+        # explicitly load auth configuration
+        keystone.conf.auth.setup_authentication()
         # NOTE(morganfainberg): ensure config_overrides has been called.
         self.addCleanup(self._assert_config_overrides_called)
 
@@ -677,13 +873,14 @@ class TestCase(BaseTestCase):
 
         # Clear the registry of providers so that providers from previous
         # tests aren't used.
-        self.addCleanup(dependency.reset)
+        self.addCleanup(provider_api.ProviderAPIs._clear_registry_instances)
+
+        # Clear the registry of JSON Home Resources
+        self.addCleanup(json_home.JsonHomeResources._reset)
 
         # Ensure Notification subscriptions and resource types are empty
         self.addCleanup(notifications.clear_subscribers)
         self.addCleanup(notifications.reset_notifier)
-
-        self.addCleanup(setattr, controllers, '_VERSIONS', [])
 
     def config(self, config_files):
         sql.initialize()
@@ -691,6 +888,10 @@ class TestCase(BaseTestCase):
 
     def load_backends(self):
         """Initialize each manager and assigns them to an attribute."""
+        # TODO(morgan): Ensure our tests only ever call load_backends
+        # a single time via this method. for now just clear the registry
+        # if we are reloading.
+        provider_api.ProviderAPIs._clear_registry_instances()
         self.useFixture(ksfixtures.BackendLoader(self))
 
     def load_fixtures(self, fixtures):
@@ -709,40 +910,46 @@ class TestCase(BaseTestCase):
         if (hasattr(self, 'identity_api') and
             hasattr(self, 'assignment_api') and
                 hasattr(self, 'resource_api')):
+            try:
+                PROVIDERS.resource_api.create_domain(
+                    resource_base.NULL_DOMAIN_ID, fixtures.ROOT_DOMAIN)
+            except exception.Conflict:
+                # the root domain already exists, skip now.
+                pass
             for domain in fixtures.DOMAINS:
-                rv = self.resource_api.create_domain(domain['id'], domain)
+                rv = PROVIDERS.resource_api.create_domain(domain['id'], domain)
                 attrname = 'domain_%s' % domain['id']
                 setattr(self, attrname, rv)
                 fixtures_to_cleanup.append(attrname)
 
-            for tenant in fixtures.TENANTS:
-                tenant_attr_name = 'tenant_%s' % tenant['name'].lower()
-                rv = self.resource_api.create_project(
-                    tenant['id'], tenant)
-                setattr(self, tenant_attr_name, rv)
-                fixtures_to_cleanup.append(tenant_attr_name)
+            for project in fixtures.PROJECTS:
+                project_attr_name = 'project_%s' % project['name'].lower()
+                rv = PROVIDERS.resource_api.create_project(
+                    project['id'], project)
+                setattr(self, project_attr_name, rv)
+                fixtures_to_cleanup.append(project_attr_name)
 
             for role in fixtures.ROLES:
-                rv = self.role_api.create_role(role['id'], role)
+                rv = PROVIDERS.role_api.create_role(role['id'], role)
                 attrname = 'role_%s' % role['name']
                 setattr(self, attrname, rv)
                 fixtures_to_cleanup.append(attrname)
 
             for user in fixtures.USERS:
                 user_copy = user.copy()
-                tenants = user_copy.pop('tenants')
+                projects = user_copy.pop('projects')
 
                 # For users, the manager layer will generate the ID
-                user_copy = self.identity_api.create_user(user_copy)
+                user_copy = PROVIDERS.identity_api.create_user(user_copy)
                 # Our tests expect that the password is still in the user
                 # record so that they can reference it, so put it back into
                 # the dict returned.
                 user_copy['password'] = user['password']
 
                 # fixtures.ROLES[2] is the _member_ role.
-                for tenant_id in tenants:
-                    self.assignment_api.add_role_to_user_and_project(
-                        user_copy['id'], tenant_id, fixtures.ROLES[2]['id'])
+                for project_id in projects:
+                    PROVIDERS.assignment_api.add_role_to_user_and_project(
+                        user_copy['id'], project_id, fixtures.ROLES[2]['id'])
 
                 # Use the ID from the fixture as the attribute name, so
                 # that our tests can easily reference each user dict, while
@@ -754,24 +961,12 @@ class TestCase(BaseTestCase):
             for role_assignment in fixtures.ROLE_ASSIGNMENTS:
                 role_id = role_assignment['role_id']
                 user = role_assignment['user']
-                tenant_id = role_assignment['tenant_id']
+                project_id = role_assignment['project_id']
                 user_id = getattr(self, 'user_%s' % user)['id']
-                self.assignment_api.add_role_to_user_and_project(
-                    user_id, tenant_id, role_id)
+                PROVIDERS.assignment_api.add_role_to_user_and_project(
+                    user_id, project_id, role_id)
 
             self.addCleanup(self.cleanup_instance(*fixtures_to_cleanup))
-
-    def _paste_config(self, config):
-        if not config.startswith('config:'):
-            test_path = os.path.join(TESTSDIR, config)
-            etc_path = os.path.join(ROOTDIR, 'etc', config)
-            for path in [test_path, etc_path]:
-                if os.path.exists('%s-paste.ini' % path):
-                    return 'config:%s-paste.ini' % path
-        return config
-
-    def loadapp(self, config, name='main'):
-        return service.loadapp(self._paste_config(config), name=name)
 
     def assertCloseEnoughForGovernmentWork(self, a, b, delta=3):
         """Assert that two datetimes are nearly equal within a small delta.
@@ -848,5 +1043,4 @@ class SQLDriverOverrides(object):
         self.config_fixture.config(group='catalog', driver='sql')
         self.config_fixture.config(group='identity', driver='sql')
         self.config_fixture.config(group='policy', driver='sql')
-        self.config_fixture.config(group='token', driver='sql')
         self.config_fixture.config(group='trust', driver='sql')

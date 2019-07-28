@@ -12,27 +12,28 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import datetime
 import uuid
 
 import oslo_context.context
 from oslo_serialization import jsonutils
-from oslo_utils import timeutils
 from six.moves import http_client
 from testtools import matchers
 import webtest
 
-from keystone import auth
 from keystone.common import authorization
 from keystone.common import cache
+from keystone.common import provider_api
 from keystone.common.validation import validators
-from keystone.common import wsgi
 from keystone import exception
-from keystone import middleware
+from keystone.resource.backends import base as resource_base
+from keystone.server.flask.request_processing.middleware import auth_context
 from keystone.tests.common import auth as common_auth
 from keystone.tests import unit
 from keystone.tests.unit import rest
 
 
+PROVIDERS = provider_api.ProviderAPIs
 DEFAULT_DOMAIN_ID = 'default'
 
 TIME_FORMAT = unit.TIME_FORMAT
@@ -41,8 +42,24 @@ TIME_FORMAT = unit.TIME_FORMAT
 class RestfulTestCase(unit.SQLDriverOverrides, rest.RestfulTestCase,
                       common_auth.AuthTestMixin):
 
-    def generate_token_schema(self, domain_scoped=False, project_scoped=False):
+    def generate_token_schema(self, system_scoped=False, domain_scoped=False,
+                              project_scoped=False):
         """Return a dictionary of token properties to validate against."""
+        ROLES_SCHEMA = {
+            'type': 'array',
+            'items': {
+                'type': 'object',
+                'properties': {
+                    'id': {'type': 'string', },
+                    'name': {'type': 'string', },
+                    'description': {'type': 'string', },
+                },
+                'required': ['id', 'name', ],
+                'additionalProperties': False,
+            },
+            'minItems': 1,
+        }
+
         properties = {
             'audit_ids': {
                 'type': 'array',
@@ -51,16 +68,6 @@ class RestfulTestCase(unit.SQLDriverOverrides, rest.RestfulTestCase,
                 },
                 'minItems': 1,
                 'maxItems': 2,
-            },
-            'bind': {
-                'type': 'object',
-                'properties': {
-                    'kerberos': {
-                        'type': 'string',
-                    },
-                },
-                'required': ['kerberos'],
-                'additionalProperties': False,
             },
             'expires_at': {
                 'type': 'string',
@@ -100,21 +107,18 @@ class RestfulTestCase(unit.SQLDriverOverrides, rest.RestfulTestCase,
             }
         }
 
-        if domain_scoped:
+        if system_scoped:
             properties['catalog'] = {'type': 'array'}
-            properties['roles'] = {
-                'type': 'array',
-                'items': {
-                    'type': 'object',
-                    'properties': {
-                        'id': {'type': 'string', },
-                        'name': {'type': 'string', },
-                    },
-                    'required': ['id', 'name', ],
-                    'additionalProperties': False,
-                },
-                'minItems': 1,
+            properties['system'] = {
+                'type': 'object',
+                'properties': {
+                    'all': {'type': 'boolean'}
+                }
             }
+            properties['roles'] = ROLES_SCHEMA
+        elif domain_scoped:
+            properties['catalog'] = {'type': 'array'}
+            properties['roles'] = ROLES_SCHEMA
             properties['domain'] = {
                 'type': 'object',
                 'required': ['id', 'name'],
@@ -127,7 +131,12 @@ class RestfulTestCase(unit.SQLDriverOverrides, rest.RestfulTestCase,
         elif project_scoped:
             properties['is_admin_project'] = {'type': 'boolean'}
             properties['catalog'] = {'type': 'array'}
-            properties['roles'] = {'type': 'array'}
+            # FIXME(lbragstad): Remove this in favor of the predefined
+            # ROLES_SCHEMA dictionary once bug 1763510 is fixed.
+            ROLES_SCHEMA['items']['properties']['domain_id'] = {
+                'type': ['null', 'string', ],
+            }
+            properties['roles'] = ROLES_SCHEMA
             properties['is_domain'] = {'type': 'boolean'}
             properties['project'] = {
                 'type': ['object'],
@@ -153,11 +162,14 @@ class RestfulTestCase(unit.SQLDriverOverrides, rest.RestfulTestCase,
             'properties': properties,
             'required': ['audit_ids', 'expires_at', 'issued_at', 'methods',
                          'user'],
-            'optional': ['bind'],
+            'optional': [],
             'additionalProperties': False
         }
 
-        if domain_scoped:
+        if system_scoped:
+            schema['required'].extend(['system', 'roles'])
+            schema['optional'].append('catalog')
+        elif domain_scoped:
             schema['required'].extend(['domain', 'roles'])
             schema['optional'].append('catalog')
         elif project_scoped:
@@ -174,9 +186,9 @@ class RestfulTestCase(unit.SQLDriverOverrides, rest.RestfulTestCase,
         config_files.append(unit.dirs.tests_conf('backend_sql.conf'))
         return config_files
 
-    def setUp(self, app_conf='keystone'):
+    def setUp(self):
         """Setup for v3 Restful Test Cases."""
-        super(RestfulTestCase, self).setUp(app_conf=app_conf)
+        super(RestfulTestCase, self).setUp()
 
         self.empty_context = {'environment': {}}
 
@@ -191,26 +203,33 @@ class RestfulTestCase(unit.SQLDriverOverrides, rest.RestfulTestCase,
 
     def _populate_default_domain(self):
         try:
-            self.resource_api.get_domain(DEFAULT_DOMAIN_ID)
+            PROVIDERS.resource_api.get_domain(DEFAULT_DOMAIN_ID)
         except exception.DomainNotFound:
+            root_domain = unit.new_domain_ref(
+                id=resource_base.NULL_DOMAIN_ID,
+                name=resource_base.NULL_DOMAIN_ID
+            )
+            PROVIDERS.resource_api.create_domain(resource_base.NULL_DOMAIN_ID,
+                                                 root_domain)
             domain = unit.new_domain_ref(
                 description=(u'The default domain'),
                 id=DEFAULT_DOMAIN_ID,
                 name=u'Default')
-            self.resource_api.create_domain(DEFAULT_DOMAIN_ID, domain)
+            PROVIDERS.resource_api.create_domain(DEFAULT_DOMAIN_ID, domain)
 
     def load_sample_data(self, create_region_and_endpoints=True):
         self._populate_default_domain()
         self.domain = unit.new_domain_ref()
         self.domain_id = self.domain['id']
-        self.resource_api.create_domain(self.domain_id, self.domain)
+        PROVIDERS.resource_api.create_domain(self.domain_id, self.domain)
 
         self.project = unit.new_project_ref(domain_id=self.domain_id)
         self.project_id = self.project['id']
-        self.project = self.resource_api.create_project(self.project_id,
-                                                        self.project)
+        self.project = PROVIDERS.resource_api.create_project(
+            self.project_id, self.project
+        )
 
-        self.user = unit.create_user(self.identity_api,
+        self.user = unit.create_user(PROVIDERS.identity_api,
                                      domain_id=self.domain_id)
         self.user_id = self.user['id']
 
@@ -218,32 +237,33 @@ class RestfulTestCase(unit.SQLDriverOverrides, rest.RestfulTestCase,
         self.default_domain_project = unit.new_project_ref(
             domain_id=DEFAULT_DOMAIN_ID)
         self.default_domain_project['id'] = self.default_domain_project_id
-        self.resource_api.create_project(self.default_domain_project_id,
-                                         self.default_domain_project)
+        PROVIDERS.resource_api.create_project(
+            self.default_domain_project_id, self.default_domain_project
+        )
 
         self.default_domain_user = unit.create_user(
-            self.identity_api,
+            PROVIDERS.identity_api,
             domain_id=DEFAULT_DOMAIN_ID)
         self.default_domain_user_id = self.default_domain_user['id']
 
         # create & grant policy.json's default role for admin_required
         self.role = unit.new_role_ref(name='admin')
         self.role_id = self.role['id']
-        self.role_api.create_role(self.role_id, self.role)
-        self.assignment_api.add_role_to_user_and_project(
+        PROVIDERS.role_api.create_role(self.role_id, self.role)
+        PROVIDERS.assignment_api.add_role_to_user_and_project(
             self.user_id, self.project_id, self.role_id)
-        self.assignment_api.add_role_to_user_and_project(
+        PROVIDERS.assignment_api.add_role_to_user_and_project(
             self.default_domain_user_id, self.default_domain_project_id,
             self.role_id)
-        self.assignment_api.add_role_to_user_and_project(
+        PROVIDERS.assignment_api.add_role_to_user_and_project(
             self.default_domain_user_id, self.project_id,
             self.role_id)
 
         # Create "req_admin" user for simulating a real user instead of the
         # admin_token_auth middleware
-        self.user_reqadmin = unit.create_user(self.identity_api,
+        self.user_reqadmin = unit.create_user(PROVIDERS.identity_api,
                                               DEFAULT_DOMAIN_ID)
-        self.assignment_api.add_role_to_user_and_project(
+        PROVIDERS.assignment_api.add_role_to_user_and_project(
             self.user_reqadmin['id'],
             self.default_domain_project_id,
             self.role_id)
@@ -251,19 +271,21 @@ class RestfulTestCase(unit.SQLDriverOverrides, rest.RestfulTestCase,
         if create_region_and_endpoints:
             self.region = unit.new_region_ref()
             self.region_id = self.region['id']
-            self.catalog_api.create_region(self.region)
+            PROVIDERS.catalog_api.create_region(self.region)
 
             self.service = unit.new_service_ref()
             self.service_id = self.service['id']
-            self.catalog_api.create_service(self.service_id,
-                                            self.service.copy())
+            PROVIDERS.catalog_api.create_service(
+                self.service_id, self.service.copy()
+            )
 
             self.endpoint = unit.new_endpoint_ref(service_id=self.service_id,
                                                   interface='public',
                                                   region_id=self.region_id)
             self.endpoint_id = self.endpoint['id']
-            self.catalog_api.create_endpoint(self.endpoint_id,
-                                             self.endpoint.copy())
+            PROVIDERS.catalog_api.create_endpoint(
+                self.endpoint_id, self.endpoint.copy()
+            )
             # The server adds 'enabled' and defaults to True.
             self.endpoint['enabled'] = True
 
@@ -355,6 +377,32 @@ class RestfulTestCase(unit.SQLDriverOverrides, rest.RestfulTestCase,
                         'project': {
                             'id': self.project['id'],
                         }
+                    }
+                }
+            })
+        return r.headers.get('X-Subject-Token')
+
+    def get_system_scoped_token(self):
+        """Convenience method for requesting system scoped tokens."""
+        r = self.admin_request(
+            method='POST',
+            path='/v3/auth/tokens',
+            body={
+                'auth': {
+                    'identity': {
+                        'methods': ['password'],
+                        'password': {
+                            'user': {
+                                'name': self.user['name'],
+                                'password': self.user['password'],
+                                'domain': {
+                                    'id': self.user['domain_id']
+                                }
+                            }
+                        }
+                    },
+                    'scope': {
+                        'system': {'all': True}
                     }
                 }
             })
@@ -549,7 +597,7 @@ class RestfulTestCase(unit.SQLDriverOverrides, rest.RestfulTestCase,
 
     def assertValidISO8601ExtendedFormatDatetime(self, dt):
         try:
-            return timeutils.parse_strtime(dt, fmt=TIME_FORMAT)
+            return datetime.datetime.strptime(dt, TIME_FORMAT)
         except Exception:
             msg = '%s is not a valid ISO 8601 extended format date time.' % dt
             raise AssertionError(msg)
@@ -683,30 +731,19 @@ class RestfulTestCase(unit.SQLDriverOverrides, rest.RestfulTestCase,
 
         return token
 
-    def assertEqualTokens(self, a, b):
-        """Assert that two tokens are equal.
+    def assertValidSystemScopedTokenResponse(self, r, *args, **kwargs):
+        token = self.assertValidTokenResponse(r)
+        self.assertTrue(token['system']['all'])
 
-        Compare two tokens except for their ids. This also truncates
-        the time in the comparison.
-        """
-        def normalize(token):
-            del token['token']['expires_at']
-            del token['token']['issued_at']
-            return token
+        system_scoped_token_schema = self.generate_token_schema(
+            system_scoped=True
+        )
+        validator_object = validators.SchemaValidator(
+            system_scoped_token_schema
+        )
+        validator_object.validate(token)
 
-        a_expires_at = self.assertValidISO8601ExtendedFormatDatetime(
-            a['token']['expires_at'])
-        b_expires_at = self.assertValidISO8601ExtendedFormatDatetime(
-            b['token']['expires_at'])
-        self.assertCloseEnoughForGovernmentWork(a_expires_at, b_expires_at)
-
-        a_issued_at = self.assertValidISO8601ExtendedFormatDatetime(
-            a['token']['issued_at'])
-        b_issued_at = self.assertValidISO8601ExtendedFormatDatetime(
-            b['token']['issued_at'])
-        self.assertCloseEnoughForGovernmentWork(a_issued_at, b_issued_at)
-
-        return self.assertDictEqual(normalize(a), normalize(b))
+        return token
 
     # catalog validation
 
@@ -899,8 +936,8 @@ class RestfulTestCase(unit.SQLDriverOverrides, rest.RestfulTestCase,
     def assertValidUser(self, entity, ref=None):
         self.assertIsNotNone(entity.get('domain_id'))
         self.assertIsNotNone(entity.get('email'))
-        self.assertIsNone(entity.get('password'))
-        self.assertNotIn('tenantId', entity)
+        self.assertNotIn('password', entity)
+        self.assertNotIn('projectId', entity)
         self.assertIn('password_expires_at', entity)
         if ref:
             self.assertEqual(ref['domain_id'], entity['domain_id'])
@@ -1018,7 +1055,7 @@ class RestfulTestCase(unit.SQLDriverOverrides, rest.RestfulTestCase,
                                               resource_url=None):
         entities = resp.result.get('role_assignments')
 
-        if expected_length:
+        if expected_length or expected_length == 0:
             self.assertEqual(expected_length, len(entities))
 
         # Collections should have relational links
@@ -1037,7 +1074,7 @@ class RestfulTestCase(unit.SQLDriverOverrides, rest.RestfulTestCase,
 
         # Only one of user or group should be present
         if entity.get('user'):
-            self.assertIsNone(entity.get('group'))
+            self.assertNotIn('group', entity)
             self.assertIsNotNone(entity['user'].get('id'))
         else:
             self.assertIsNotNone(entity.get('group'))
@@ -1047,11 +1084,14 @@ class RestfulTestCase(unit.SQLDriverOverrides, rest.RestfulTestCase,
         self.assertIsNotNone(entity.get('scope'))
 
         if entity['scope'].get('project'):
-            self.assertIsNone(entity['scope'].get('domain'))
+            self.assertNotIn('domain', entity['scope'])
             self.assertIsNotNone(entity['scope']['project'].get('id'))
-        else:
+        elif entity['scope'].get('domain'):
             self.assertIsNotNone(entity['scope'].get('domain'))
             self.assertIsNotNone(entity['scope']['domain'].get('id'))
+        else:
+            self.assertIsNotNone(entity['scope'].get('system'))
+            self.assertTrue(entity['scope']['system']['all'])
 
         # An assignment link should be present
         self.assertIsNotNone(entity.get('links'))
@@ -1157,6 +1197,8 @@ class RestfulTestCase(unit.SQLDriverOverrides, rest.RestfulTestCase,
                 self.assertValidRole(role)
 
             self.assertValidListLinks(entity.get('roles_links'))
+            # Mirror the test tempest does to ensure the self-link is correct
+            self.assertIn('v3/OS-TRUST/trusts', entity.get('links')['self'])
 
             # always disallow role xor project_id (neither or both is allowed)
             has_roles = bool(entity.get('roles'))
@@ -1188,74 +1230,16 @@ class RestfulTestCase(unit.SQLDriverOverrides, rest.RestfulTestCase,
         for attribute in attributes:
             self.assertIsNotNone(entity.get(attribute))
 
-    def assertValidServiceProviderListResponse(self, resp, *args, **kwargs):
-        if kwargs.get('keys_to_check') is None:
-            kwargs['keys_to_check'] = ['auth_url', 'id', 'enabled',
-                                       'description', 'relay_state_prefix',
-                                       'sp_url']
-        return self.assertValidListResponse(
-            resp,
-            'service_providers',
-            self.assertValidServiceProvider,
-            *args,
-            **kwargs)
-
-    def build_external_auth_request(self, remote_user,
-                                    remote_domain=None, auth_data=None,
-                                    kerberos=False):
+    def build_external_auth_environ(self, remote_user, remote_domain=None):
         environment = {'REMOTE_USER': remote_user, 'AUTH_TYPE': 'Negotiate'}
         if remote_domain:
             environment['REMOTE_DOMAIN'] = remote_domain
-        if not auth_data:
-            auth_data = self.build_authentication_request(
-                kerberos=kerberos)['auth']
-        auth_info = auth.core.AuthInfo.create(auth_data)
-        auth_context = auth.core.AuthContext(extras={}, method_names=[])
-        return self.make_request(environ=environment), auth_info, auth_context
+        return environment
 
 
 class VersionTestCase(RestfulTestCase):
     def test_get_version(self):
         pass
-
-
-# NOTE(morganfainberg): To be removed when admin_token_auth is removed. This
-# has been split out to allow testing admin_token auth without enabling it
-# for other tests.
-class AuthContextMiddlewareAdminTokenTestCase(RestfulTestCase):
-
-    def config_overrides(self):
-        super(AuthContextMiddlewareAdminTokenTestCase, self).config_overrides()
-        self.config_fixture.config(
-            admin_token='ADMIN')
-
-    # NOTE(morganfainberg): This is knowingly copied from below for simplicity
-    # during the deprecation cycle.
-    def _middleware_request(self, token, extra_environ=None):
-
-        def application(environ, start_response):
-            body = b'body'
-            headers = [('Content-Type', 'text/html; charset=utf8'),
-                       ('Content-Length', str(len(body)))]
-            start_response('200 OK', headers)
-            return [body]
-
-        app = webtest.TestApp(middleware.AuthContextMiddleware(application),
-                              extra_environ=extra_environ)
-        resp = app.get('/', headers={authorization.AUTH_TOKEN_HEADER: token})
-        self.assertEqual('body', resp.text)  # just to make sure it worked
-        return resp.request
-
-    def test_admin_auth_context(self):
-        # test to make sure AuthContextMiddleware does not attempt to build the
-        # auth context if the admin_token middleware indicates it's admin
-        # already.
-        token_id = uuid.uuid4().hex  # token doesn't matter.
-        # the admin_token middleware sets is_admin in the context.
-        extra_environ = {wsgi.CONTEXT_ENV: {'is_admin': True}}
-        req = self._middleware_request(token_id, extra_environ)
-        auth_context = req.environ.get(authorization.AUTH_CONTEXT_ENV)
-        self.assertDictEqual({}, auth_context)
 
 
 # NOTE(gyee): test AuthContextMiddleware here instead of test_middleware.py
@@ -1271,7 +1255,7 @@ class AuthContextMiddlewareTestCase(RestfulTestCase):
             start_response('200 OK', headers)
             return [body]
 
-        app = webtest.TestApp(middleware.AuthContextMiddleware(application),
+        app = webtest.TestApp(auth_context.AuthContextMiddleware(application),
                               extra_environ=extra_environ)
         resp = app.get('/', headers={authorization.AUTH_TOKEN_HEADER: token})
         self.assertEqual(b'body', resp.body)  # just to make sure it worked
@@ -1482,7 +1466,7 @@ class AssignmentTestMixin(object):
         entity = {'links': {}}
         attributes_for_links = {}
         if project_ref:
-            dmn_name = self.resource_api.get_domain(
+            dmn_name = PROVIDERS.resource_api.get_domain(
                 project_ref['domain_id'])['name']
 
             entity['scope'] = {'project': {
@@ -1497,7 +1481,7 @@ class AssignmentTestMixin(object):
                                           'name': domain_ref['name']}}
             attributes_for_links['domain_id'] = domain_ref['id']
         if user_ref:
-            dmn_name = self.resource_api.get_domain(
+            dmn_name = PROVIDERS.resource_api.get_domain(
                 user_ref['domain_id'])['name']
             entity['user'] = {'id': user_ref['id'],
                               'name': user_ref['name'],
@@ -1505,7 +1489,7 @@ class AssignmentTestMixin(object):
                                          'name': dmn_name}}
             attributes_for_links['user_id'] = user_ref['id']
         else:
-            dmn_name = self.resource_api.get_domain(
+            dmn_name = PROVIDERS.resource_api.get_domain(
                 group_ref['domain_id'])['name']
             entity['group'] = {'id': group_ref['id'],
                                'name': group_ref['name'],
@@ -1518,7 +1502,7 @@ class AssignmentTestMixin(object):
             entity['role'] = {'id': role_ref['id'],
                               'name': role_ref['name']}
             if role_ref['domain_id']:
-                dmn_name = self.resource_api.get_domain(
+                dmn_name = PROVIDERS.resource_api.get_domain(
                     role_ref['domain_id'])['name']
                 entity['role']['domain'] = {'id': role_ref['domain_id'],
                                             'name': dmn_name}

@@ -15,6 +15,7 @@
 from __future__ import absolute_import
 from __future__ import print_function
 
+import datetime
 import os
 import sys
 import uuid
@@ -26,9 +27,11 @@ from oslo_log import log
 from oslo_serialization import jsonutils
 import pbr.version
 
+from keystone.cmd import bootstrap
 from keystone.cmd import doctor
 from keystone.common import driver_hints
 from keystone.common import fernet_utils
+from keystone.common import jwt_utils
 from keystone.common import sql
 from keystone.common.sql import upgrades
 from keystone.common import utils
@@ -39,8 +42,6 @@ from keystone.federation import idp
 from keystone.federation import utils as mapping_engine
 from keystone.i18n import _
 from keystone.server import backends
-from keystone import token
-
 
 CONF = keystone.conf.CONF
 LOG = log.getLogger(__name__)
@@ -63,20 +64,7 @@ class BootStrap(BaseApp):
     name = "bootstrap"
 
     def __init__(self):
-        self.load_backends()
-        self.project_id = uuid.uuid4().hex
-        self.role_id = uuid.uuid4().hex
-        self.service_id = None
-        self.service_name = None
-        self.username = None
-        self.project_name = None
-        self.role_name = None
-        self.password = None
-        self.public_url = None
-        self.internal_url = None
-        self.admin_url = None
-        self.region_id = None
-        self.endpoints = {}
+        self.bootstrapper = bootstrap.Bootstrapper()
 
     @classmethod
     def add_argument_parser(cls, subparsers):
@@ -107,7 +95,7 @@ class BootStrap(BaseApp):
                             metavar='OS_BOOTSTRAP_ADMIN_URL',
                             help=('The initial identity admin url created '
                                   'during the keystone bootstrap process. '
-                                  'e.g. http://127.0.0.1:35357/v3'))
+                                  'e.g. http://127.0.0.1:5000/v3'))
         parser.add_argument('--bootstrap-public-url',
                             metavar='OS_BOOTSTRAP_PUBLIC_URL',
                             help=('The initial identity public url created '
@@ -125,15 +113,14 @@ class BootStrap(BaseApp):
                                   'process.'))
         return parser
 
-    def load_backends(self):
-        drivers = backends.load_backends()
-        self.resource_manager = drivers['resource_api']
-        self.identity_manager = drivers['identity_api']
-        self.assignment_manager = drivers['assignment_api']
-        self.catalog_manager = drivers['catalog_api']
-        self.role_manager = drivers['role_api']
+    def do_bootstrap(self):
+        """Perform the bootstrap actions.
 
-    def _get_config(self):
+        Create bootstrap user, project, and role so that CMS, humans, or
+        scripts can continue to perform initial setup (domains, projects,
+        services, endpoints, etc) of Keystone when standing up a new
+        deployment.
+        """
         self.username = (
             os.environ.get('OS_BOOTSTRAP_USERNAME') or
             CONF.command.bootstrap_username)
@@ -161,218 +148,30 @@ class BootStrap(BaseApp):
         self.region_id = (
             os.environ.get('OS_BOOTSTRAP_REGION_ID') or
             CONF.command.bootstrap_region_id)
-
-    def do_bootstrap(self):
-        """Perform the bootstrap actions.
-
-        Create bootstrap user, project, and role so that CMS, humans, or
-        scripts can continue to perform initial setup (domains, projects,
-        services, endpoints, etc) of Keystone when standing up a new
-        deployment.
-        """
-        self._get_config()
+        self.service_id = None
+        self.endpoints = None
 
         if self.password is None:
-            print(_('Either --bootstrap-password argument or '
+            print(_('ERROR: Either --bootstrap-password argument or '
                     'OS_BOOTSTRAP_PASSWORD must be set.'))
-            raise ValueError
+            sys.exit(1)
 
-        # NOTE(morganfainberg): Ensure the default domain is in-fact created
-        default_domain = {
-            'id': CONF.identity.default_domain_id,
-            'name': 'Default',
-            'enabled': True,
-            'description': 'The default domain'
-        }
-        try:
-            self.resource_manager.create_domain(
-                domain_id=default_domain['id'],
-                domain=default_domain)
-            LOG.info('Created domain %s', default_domain['id'])
-        except exception.Conflict:
-            # NOTE(morganfainberg): Domain already exists, continue on.
-            LOG.info('Domain %s already exists, skipping creation.',
-                     default_domain['id'])
+        self.bootstrapper.admin_password = self.password
+        self.bootstrapper.admin_username = self.username
+        self.bootstrapper.project_name = self.project_name
+        self.bootstrapper.admin_role_name = self.role_name
+        self.bootstrapper.service_name = self.service_name
+        self.bootstrapper.service_id = self.service_id
+        self.bootstrapper.admin_url = self.admin_url
+        self.bootstrapper.public_url = self.public_url
+        self.bootstrapper.internal_url = self.internal_url
+        self.bootstrapper.region_id = self.region_id
 
-        try:
-            self.resource_manager.create_project(
-                project_id=self.project_id,
-                project={'enabled': True,
-                         'id': self.project_id,
-                         'domain_id': default_domain['id'],
-                         'description': 'Bootstrap project for initializing '
-                                        'the cloud.',
-                         'name': self.project_name}
-            )
-            LOG.info('Created project %s', self.project_name)
-        except exception.Conflict:
-            LOG.info('Project %s already exists, skipping creation.',
-                     self.project_name)
-            project = self.resource_manager.get_project_by_name(
-                self.project_name, default_domain['id'])
-            self.project_id = project['id']
-
-        # NOTE(morganfainberg): Do not create the user if it already exists.
-        try:
-            user = self.identity_manager.get_user_by_name(self.username,
-                                                          default_domain['id'])
-            LOG.info('User %s already exists, skipping creation.',
-                     self.username)
-
-            # If the user is not enabled, re-enable them. This also helps
-            # provide some useful logging output later.
-            update = {}
-            enabled = user['enabled']
-            if not enabled:
-                update['enabled'] = True
-
-            try:
-                self.identity_manager.driver.authenticate(
-                    user['id'], self.password
-                )
-            except AssertionError:
-                # This means that authentication failed and that we need to
-                # update the user's password. This is going to persist a
-                # revocation event that will make all previous tokens for the
-                # user invalid, which is OK because it falls within the scope
-                # of revocation. If a password changes, we shouldn't be able to
-                # use tokens obtained with an old password.
-                update['password'] = self.password
-
-            # Only make a call to update the user if the password has changed
-            # or the user was previously disabled. This allows bootstrap to act
-            # as a recovery tool, without having to create a new user.
-            if update:
-                user = self.identity_manager.update_user(user['id'], update)
-                LOG.info('Reset password for user %s.', self.username)
-                if not enabled and user['enabled']:
-                    # Although we always try to enable the user, this log
-                    # message only makes sense if we know that the user was
-                    # previously disabled.
-                    LOG.info('Enabled user %s.', self.username)
-        except exception.UserNotFound:
-            user = self.identity_manager.create_user(
-                user_ref={'name': self.username,
-                          'enabled': True,
-                          'domain_id': default_domain['id'],
-                          'password': self.password
-                          }
-            )
-            LOG.info('Created user %s', self.username)
-
-        # NOTE(morganfainberg): Do not create the role if it already exists.
-        try:
-            self.role_manager.create_role(
-                role_id=self.role_id,
-                role={'name': self.role_name,
-                      'id': self.role_id},
-            )
-            LOG.info('Created role %s', self.role_name)
-        except exception.Conflict:
-            LOG.info('Role %s exists, skipping creation.', self.role_name)
-            # NOTE(davechen): There is no backend method to get the role
-            # by name, so build the hints to list the roles and filter by
-            # name instead.
-            hints = driver_hints.Hints()
-            hints.add_filter('name', self.role_name)
-            role = self.role_manager.list_roles(hints)
-            self.role_id = role[0]['id']
-
-        # NOTE(morganfainberg): Handle the case that the role assignment has
-        # already occurred.
-        try:
-            self.assignment_manager.add_role_to_user_and_project(
-                user_id=user['id'],
-                tenant_id=self.project_id,
-                role_id=self.role_id
-            )
-            LOG.info('Granted %(role)s on %(project)s to user'
-                     ' %(username)s.',
-                     {'role': self.role_name,
-                      'project': self.project_name,
-                      'username': self.username})
-        except exception.Conflict:
-            LOG.info('User %(username)s already has %(role)s on '
-                     '%(project)s.',
-                     {'username': self.username,
-                      'role': self.role_name,
-                      'project': self.project_name})
-
-        if self.region_id:
-            try:
-                self.catalog_manager.create_region(
-                    region_ref={'id': self.region_id}
-                )
-                LOG.info('Created region %s', self.region_id)
-            except exception.Conflict:
-                LOG.info('Region %s exists, skipping creation.',
-                         self.region_id)
-
-        if self.public_url or self.admin_url or self.internal_url:
-            hints = driver_hints.Hints()
-            hints.add_filter('type', 'identity')
-            services = self.catalog_manager.list_services(hints)
-
-            if services:
-                service_ref = services[0]
-
-                hints = driver_hints.Hints()
-                hints.add_filter('service_id', service_ref['id'])
-                if self.region_id:
-                    hints.add_filter('region_id', self.region_id)
-
-                endpoints = self.catalog_manager.list_endpoints(hints)
-            else:
-                service_ref = {'id': uuid.uuid4().hex,
-                               'name': self.service_name,
-                               'type': 'identity',
-                               'enabled': True}
-
-                self.catalog_manager.create_service(
-                    service_id=service_ref['id'],
-                    service_ref=service_ref)
-
-                endpoints = []
-
-            self.service_id = service_ref['id']
-
-            available_interfaces = {e['interface']: e for e in endpoints}
-            expected_endpoints = {'public': self.public_url,
-                                  'internal': self.internal_url,
-                                  'admin': self.admin_url}
-
-            for interface, url in expected_endpoints.items():
-                if not url:
-                    # not specified to bootstrap command
-                    continue
-
-                try:
-                    endpoint_ref = available_interfaces[interface]
-                except KeyError:
-                    endpoint_ref = {'id': uuid.uuid4().hex,
-                                    'interface': interface,
-                                    'url': url,
-                                    'service_id': self.service_id,
-                                    'enabled': True}
-
-                    if self.region_id:
-                        endpoint_ref['region_id'] = self.region_id
-
-                    self.catalog_manager.create_endpoint(
-                        endpoint_id=endpoint_ref['id'],
-                        endpoint_ref=endpoint_ref)
-
-                    LOG.info('Created %(interface)s endpoint %(url)s',
-                             {'interface': interface, 'url': url})
-                else:
-                    # NOTE(jamielennox): electing not to update existing
-                    # endpoints here. There may be call to do so in future.
-                    LOG.info('Skipping %s endpoint as already created',
-                             interface)
-
-                self.endpoints[interface] = endpoint_ref['id']
-
-        self.assignment_manager.ensure_default_role()
+        self.bootstrapper.bootstrap()
+        self.reader_role_id = self.bootstrapper.reader_role_id
+        self.member_role_id = self.bootstrapper.member_role_id
+        self.role_id = self.bootstrapper.admin_role_id
+        self.project_id = self.bootstrapper.project_id
 
     @classmethod
     def main(cls):
@@ -454,7 +253,7 @@ class DbSync(BaseApp):
         return parser
 
     @classmethod
-    def check_db_sync_status(self):
+    def check_db_sync_status(cls):
         status = 0
         try:
             expand_version = upgrades.get_db_version(repo='expand_repo')
@@ -585,13 +384,40 @@ class BasePermissionsSetup(BaseApp):
 
         return keystone_user_id, keystone_group_id
 
+    @classmethod
+    def initialize_fernet_repository(
+            cls, keystone_user_id, keystone_group_id, config_group=None):
+        conf_group = getattr(CONF, config_group)
+        futils = fernet_utils.FernetUtils(
+            conf_group.key_repository,
+            conf_group.max_active_keys,
+            config_group
+        )
+
+        futils.create_key_directory(keystone_user_id, keystone_group_id)
+        if futils.validate_key_repository(requires_write=True):
+            futils.initialize_key_repository(
+                keystone_user_id, keystone_group_id)
+
+    @classmethod
+    def rotate_fernet_repository(
+            cls, keystone_user_id, keystone_group_id, config_group=None):
+        conf_group = getattr(CONF, config_group)
+        futils = fernet_utils.FernetUtils(
+            conf_group.key_repository,
+            conf_group.max_active_keys,
+            config_group
+        )
+        if futils.validate_key_repository(requires_write=True):
+            futils.rotate_keys(keystone_user_id, keystone_group_id)
+
 
 class FernetSetup(BasePermissionsSetup):
-    """Setup a key repository for Fernet tokens.
+    """Setup key repositories for Fernet tokens and auth receipts.
 
     This also creates a primary key used for both creating and validating
-    Fernet tokens. To improve security, you should rotate your keys (using
-    keystone-manage fernet_rotate, for example).
+    Fernet tokens and auth receipts. To improve security, you should rotate
+    your keys (using keystone-manage fernet_rotate, for example).
 
     """
 
@@ -599,17 +425,27 @@ class FernetSetup(BasePermissionsSetup):
 
     @classmethod
     def main(cls):
-        futils = fernet_utils.FernetUtils(
-            CONF.fernet_tokens.key_repository,
-            CONF.fernet_tokens.max_active_keys,
-            'fernet_tokens'
-        )
-
         keystone_user_id, keystone_group_id = cls.get_user_group()
-        futils.create_key_directory(keystone_user_id, keystone_group_id)
-        if futils.validate_key_repository(requires_write=True):
-            futils.initialize_key_repository(
-                keystone_user_id, keystone_group_id)
+        cls.initialize_fernet_repository(
+            keystone_user_id, keystone_group_id, 'fernet_tokens')
+
+        if (os.path.abspath(CONF.fernet_tokens.key_repository) !=
+                os.path.abspath(CONF.fernet_receipts.key_repository)):
+            cls.initialize_fernet_repository(
+                keystone_user_id, keystone_group_id, 'fernet_receipts')
+        elif(CONF.fernet_tokens.max_active_keys !=
+                CONF.fernet_receipts.max_active_keys):
+            # WARNING(adriant): If the directories are the same,
+            # 'max_active_keys' is ignored from fernet_receipts in favor of
+            # fernet_tokens to avoid a potential mismatch. Only if the
+            # directories are different do we create a different one for
+            # receipts, and then respect 'max_active_keys' for receipts.
+            LOG.warning(
+                "Receipt and Token fernet key directories are the same "
+                "but `max_active_keys` is different. Receipt "
+                "`max_active_keys` will be ignored in favor of Token "
+                "`max_active_keys`."
+            )
 
 
 class FernetRotate(BasePermissionsSetup):
@@ -634,15 +470,140 @@ class FernetRotate(BasePermissionsSetup):
 
     @classmethod
     def main(cls):
-        futils = fernet_utils.FernetUtils(
-            CONF.fernet_tokens.key_repository,
-            CONF.fernet_tokens.max_active_keys,
-            'fernet_tokens'
-        )
-
         keystone_user_id, keystone_group_id = cls.get_user_group()
-        if futils.validate_key_repository(requires_write=True):
-            futils.rotate_keys(keystone_user_id, keystone_group_id)
+        cls.rotate_fernet_repository(
+            keystone_user_id, keystone_group_id, 'fernet_tokens')
+        if (os.path.abspath(CONF.fernet_tokens.key_repository) !=
+                os.path.abspath(CONF.fernet_receipts.key_repository)):
+            cls.rotate_fernet_repository(
+                keystone_user_id, keystone_group_id, 'fernet_receipts')
+
+
+class CreateJWSKeyPair(BasePermissionsSetup):
+    """Create a key pair for signing and validating JWS tokens.
+
+    This command creates a public and private key pair to use for signing and
+    validating JWS token signatures. The key pair is written to the directory
+    where the command is invoked.
+
+    """
+
+    name = 'create_jws_keypair'
+
+    @classmethod
+    def add_argument_parser(cls, subparsers):
+        parser = super(CreateJWSKeyPair, cls).add_argument_parser(subparsers)
+
+        parser.add_argument(
+            '--force', action='store_true',
+            help=('Forcibly overwrite keys if they already exist')
+        )
+        return parser
+
+    @classmethod
+    def main(cls):
+        current_directory = os.getcwd()
+        private_key_path = os.path.join(current_directory, 'private.pem')
+        public_key_path = os.path.join(current_directory, 'public.pem')
+
+        if os.path.isfile(private_key_path) and not CONF.command.force:
+            raise SystemExit(_('Private key %(path)s already exists')
+                             % {'path': private_key_path})
+        if os.path.isfile(public_key_path) and not CONF.command.force:
+            raise SystemExit(_('Public key %(path)s already exists')
+                             % {'path': public_key_path})
+
+        jwt_utils.create_jws_keypair(private_key_path, public_key_path)
+
+
+class TokenSetup(BasePermissionsSetup):
+    """Setup a key repository for tokens.
+
+    This also creates a primary key used for both creating and validating
+    tokens. To improve security, you should rotate your keys (using
+    keystone-manage token_rotate, for example).
+
+    """
+
+    name = 'token_setup'
+
+    @classmethod
+    def main(cls):
+        keystone_user_id, keystone_group_id = cls.get_user_group()
+        cls.initialize_fernet_repository(
+            keystone_user_id, keystone_group_id, 'fernet_tokens')
+
+
+class TokenRotate(BasePermissionsSetup):
+    """Rotate token encryption keys.
+
+    This assumes you have already run keystone-manage token_setup.
+
+    A new primary key is placed into rotation, which is used for new tokens.
+    The old primary key is demoted to secondary, which can then still be used
+    for validating tokens. Excess secondary keys (beyond [token]
+    max_active_keys) are revoked. Revoked keys are permanently deleted. A new
+    staged key will be created and used to validate tokens. The next time key
+    rotation takes place, the staged key will be put into rotation as the
+    primary key.
+
+    Rotating keys too frequently, or with [token] max_active_keys set
+    too low, will cause tokens to become invalid prior to their expiration.
+
+    """
+
+    name = 'token_rotate'
+
+    @classmethod
+    def main(cls):
+        keystone_user_id, keystone_group_id = cls.get_user_group()
+        cls.rotate_fernet_repository(
+            keystone_user_id, keystone_group_id, 'fernet_tokens')
+
+
+class ReceiptSetup(BasePermissionsSetup):
+    """Setup a key repository for auth receipts.
+
+    This also creates a primary key used for both creating and validating
+    receipts. To improve security, you should rotate your keys (using
+    keystone-manage receipt_rotate, for example).
+
+    """
+
+    name = 'receipt_setup'
+
+    @classmethod
+    def main(cls):
+        keystone_user_id, keystone_group_id = cls.get_user_group()
+        cls.initialize_fernet_repository(
+            keystone_user_id, keystone_group_id, 'fernet_receipts')
+
+
+class ReceiptRotate(BasePermissionsSetup):
+    """Rotate auth receipts encryption keys.
+
+    This assumes you have already run keystone-manage receipt_setup.
+
+    A new primary key is placed into rotation, which is used for new receipts.
+    The old primary key is demoted to secondary, which can then still be used
+    for validating receipts. Excess secondary keys (beyond [receipt]
+    max_active_keys) are revoked. Revoked keys are permanently deleted. A new
+    staged key will be created and used to validate receipts. The next time key
+    rotation takes place, the staged key will be put into rotation as the
+    primary key.
+
+    Rotating keys too frequently, or with [receipt] max_active_keys set
+    too low, will cause receipts to become invalid prior to their expiration.
+
+    """
+
+    name = 'receipt_rotate'
+
+    @classmethod
+    def main(cls):
+        keystone_user_id, keystone_group_id = cls.get_user_group()
+        cls.rotate_fernet_repository(
+            keystone_user_id, keystone_group_id, 'fernet_receipts')
 
 
 class CredentialSetup(BasePermissionsSetup):
@@ -800,22 +761,58 @@ class CredentialMigrate(BasePermissionsSetup):
         klass.migrate_credentials()
 
 
-class TokenFlush(BaseApp):
-    """Flush expired tokens from the backend."""
+class TrustFlush(BaseApp):
+    """Flush expired and non-expired soft deleted trusts from the backend."""
 
-    name = 'token_flush'
+    name = 'trust_flush'
+
+    @classmethod
+    def add_argument_parser(cls, subparsers):
+        parser = super(TrustFlush, cls).add_argument_parser(subparsers)
+
+        parser.add_argument('--project-id', default=None,
+                            help=('The id of the project of which the '
+                                  'expired or non-expired soft-deleted '
+                                  'trusts is to be purged'))
+        parser.add_argument('--trustor-user-id', default=None,
+                            help=('The id of the trustor of which the '
+                                  'expired or non-expired soft-deleted '
+                                  'trusts is to be purged'))
+        parser.add_argument('--trustee-user-id', default=None,
+                            help=('The id of the trustee of which the '
+                                  'expired or non-expired soft-deleted '
+                                  'trusts is to be purged'))
+        parser.add_argument('--date', default=datetime.datetime.utcnow(),
+                            help=('The date of which the expired or '
+                                  'non-expired soft-deleted trusts older '
+                                  'than that will be purged. The format of '
+                                  'the date to be "DD-MM-YYYY". If no date '
+                                  'is supplied keystone-manage will use the '
+                                  'system clock time at runtime'))
+        return parser
 
     @classmethod
     def main(cls):
-        token_manager = token.persistence.PersistenceManager()
-        try:
-            token_manager.flush_expired_tokens()
-        except exception.NotImplemented:
-            # NOTE(ravelar159): Stop NotImplemented from unsupported token
-            # driver when using token_flush and print out warning instead
-            LOG.warning('Token driver %s does not support token_flush. '
-                        'The token_flush command had no effect.',
-                        CONF.token.driver)
+        drivers = backends.load_backends()
+        trust_manager = drivers['trust_api']
+        if CONF.command.date:
+            if not isinstance(CONF.command.date, datetime.datetime):
+                try:
+                    CONF.command.date = datetime.datetime.strptime(
+                        CONF.command.date, '%d-%m-%Y')
+                except KeyError:
+                    raise ValueError("'%s'Invalid input for date, should be "
+                                     "DD-MM-YYYY", CONF.command.date)
+            else:
+                LOG.info("No date is supplied, keystone-manage will use the "
+                         "system clock time at runtime ")
+
+        trust_manager.flush_expired_and_soft_deleted_trusts(
+            project_id=CONF.command.project_id,
+            trustor_user_id=CONF.command.trustor_user_id,
+            trustee_user_id=CONF.command.trustee_user_id,
+            date=CONF.command.date
+        )
 
 
 class MappingPurge(BaseApp):
@@ -893,7 +890,7 @@ class MappingPurge(BaseApp):
         if CONF.command.local_id is not None:
             mapping['local_id'] = CONF.command.local_id
         if CONF.command.type is not None:
-            mapping['type'] = CONF.command.type
+            mapping['entity_type'] = CONF.command.type
 
         mapping_manager.purge_mappings(mapping)
 
@@ -1005,7 +1002,7 @@ class DomainConfigUploadFiles(object):
         try:
             for group in sections:
                 for option in sections[group]:
-                        sections[group][option] = sections[group][option][0]
+                    sections[group][option] = sections[group][option][0]
             self.domain_config_manager.create_config(domain_ref['id'],
                                                      sections)
             return True
@@ -1113,7 +1110,7 @@ class SamlIdentityProviderMetadata(BaseApp):
     @staticmethod
     def main():
         metadata = idp.MetadataGenerator().generate_metadata()
-        print(metadata.to_string())
+        print(metadata)
 
 
 class MappingEngineTester(BaseApp):
@@ -1132,7 +1129,7 @@ class MappingEngineTester(BaseApp):
     def read_rules(self, path):
         self.rules_pathname = path
         try:
-            with open(path) as file:
+            with open(path, "rb") as file:
                 self.rules = jsonutils.load(file)
         except ValueError as e:
             raise SystemExit(_('Error while parsing rules '
@@ -1159,7 +1156,7 @@ class MappingEngineTester(BaseApp):
                 raise SystemExit(msg % {'pathname': self.assertion_pathname,
                                         'line_num': line_num,
                                         'line': line})
-        assertion = self.assertion.split('\n')
+        assertion = self.assertion.splitlines()
         assertion_dict = {}
         prefix = CONF.command.prefix
         for line_num, line in enumerate(assertion, 1):
@@ -1294,11 +1291,16 @@ CMDS = [
     DomainConfigUpload,
     FernetRotate,
     FernetSetup,
+    CreateJWSKeyPair,
     MappingPopulate,
     MappingPurge,
     MappingEngineTester,
+    ReceiptRotate,
+    ReceiptSetup,
     SamlIdentityProviderMetadata,
-    TokenFlush,
+    TokenRotate,
+    TokenSetup,
+    TrustFlush
 ]
 
 
@@ -1313,19 +1315,44 @@ command_opt = cfg.SubCommandOpt('command',
                                 handler=add_command_parsers)
 
 
-def main(argv=None, config_files=None):
+def main(argv=None, developer_config_file=None):
+    """Main entry point into the keystone-manage CLI utility.
+
+    :param argv: Arguments supplied via the command line using the ``sys``
+                 standard library.
+    :type argv: list
+    :param developer_config_file: The location of a configuration file normally
+                                  found in development environments.
+    :type developer_config_file: string
+
+    """
     CONF.register_cli_opt(command_opt)
 
     keystone.conf.configure()
     sql.initialize()
     keystone.conf.set_default_for_default_log_levels()
 
+    user_supplied_config_file = False
+    if argv:
+        for argument in argv:
+            if argument == '--config-file':
+                user_supplied_config_file = True
+
+    if developer_config_file:
+        developer_config_file = [developer_config_file]
+
+    # NOTE(lbragstad): At this point in processing, the first element of argv
+    # is the binary location of keystone-manage, which oslo.config doesn't need
+    # and is keystone specific. Only pass a list of arguments so that
+    # oslo.config can determine configuration file locations based on user
+    # provided arguments, if present.
     CONF(args=argv[1:],
          project='keystone',
          version=pbr.version.VersionInfo('keystone').version_string(),
          usage='%(prog)s [' + '|'.join([cmd.name for cmd in CMDS]) + ']',
-         default_config_files=config_files)
-    if not CONF.default_config_files:
+         default_config_files=developer_config_file)
+
+    if not CONF.default_config_files and not user_supplied_config_file:
         LOG.warning('Config file not found, using default configs.')
     keystone.conf.setup_logging()
     CONF.command.cmd_class.main()

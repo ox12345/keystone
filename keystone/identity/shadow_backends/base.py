@@ -24,11 +24,12 @@ class ShadowUsersDriverBase(object):
     """Interface description for an Shadow Users driver."""
 
     @abc.abstractmethod
-    def create_federated_user(self, domain_id, federated_dict):
+    def create_federated_user(self, domain_id, federated_dict, email=None):
         """Create a new user with the federated identity.
 
         :param domain_id: The domain ID of the IdP used for the federated user
         :param dict federated_dict: Reference to the federated user
+        :param email: Federated user's email
         :returns dict: Containing the user reference
 
         """
@@ -84,6 +85,19 @@ class ShadowUsersDriverBase(object):
         """Set the last active at date for the user.
 
         :param user_id: Unique identifier of the user
+
+        """
+        raise exception.NotImplemented()
+
+    @abc.abstractmethod
+    def list_federated_users_info(self, hints=None):
+        """Get the shadow users info with the specified filters.
+
+        :param hints: contains the list of filters yet to be satisfied.
+                      Any filters satisfied here will be removed so that
+                      the caller will know if any filters remain.
+        :returns list: A list of objects that containing the shadow users
+                       reference.
 
         """
         raise exception.NotImplemented()

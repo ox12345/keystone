@@ -15,14 +15,14 @@
 """Main entry point into the Assignment service."""
 
 import copy
-import functools
+import itertools
 
 from oslo_log import log
 
 from keystone.common import cache
-from keystone.common import dependency
 from keystone.common import driver_hints
 from keystone.common import manager
+from keystone.common import provider_api
 import keystone.conf
 from keystone import exception
 from keystone.i18n import _
@@ -31,6 +31,7 @@ from keystone import notifications
 
 CONF = keystone.conf.CONF
 LOG = log.getLogger(__name__)
+PROVIDERS = provider_api.ProviderAPIs
 
 # This is a general cache region for assignment administration (CRUD
 # operations).
@@ -46,9 +47,6 @@ MEMOIZE_COMPUTED_ASSIGNMENTS = cache.get_memoization_decorator(
 
 
 @notifications.listener
-@dependency.provider('assignment_api')
-@dependency.requires('credential_api', 'identity_api', 'resource_api',
-                     'role_api')
 class Manager(manager.Manager):
     """Default pivot point for the Assignment backend.
 
@@ -58,7 +56,11 @@ class Manager(manager.Manager):
     """
 
     driver_namespace = 'keystone.assignment'
+    _provides_api = 'assignment_api'
 
+    _SYSTEM_SCOPE_TOKEN = 'system'  # nosec
+    _USER_SYSTEM = 'UserSystem'
+    _GROUP_SYSTEM = 'GroupSystem'
     _PROJECT = 'project'
     _ROLE_REMOVED_FROM_USER = 'role_removed_from_user'
     _INVALIDATION_USER_PROJECT_TOKENS = 'invalidate_user_project_tokens'
@@ -82,17 +84,34 @@ class Manager(manager.Manager):
         # TODO(morganfainberg): Implement a way to get only group_ids
         # instead of the more expensive to_dict() call for each record.
         return [x['id'] for
-                x in self.identity_api.list_groups_for_user(user_id)]
+                x in PROVIDERS.identity_api.list_groups_for_user(user_id)]
 
-    def list_user_ids_for_project(self, tenant_id):
-        self.resource_api.get_project(tenant_id)
+    def list_user_ids_for_project(self, project_id):
+        PROVIDERS.resource_api.get_project(project_id)
         assignment_list = self.list_role_assignments(
-            project_id=tenant_id, effective=True)
+            project_id=project_id, effective=True)
         # Use set() to process the list to remove any duplicates
         return list(set([x['user_id'] for x in assignment_list]))
 
+    def _send_app_cred_notification_for_role_removal(self, role_id):
+        """Delete all application credential for a specific role.
+
+        :param role_id: role identifier
+        :type role_id: string
+        """
+        assignments = self.list_role_assignments(role_id=role_id)
+        for assignment in assignments:
+            if 'user_id' in assignment and 'project_id' in assignment:
+                payload = {
+                    'user_id': assignment['user_id'],
+                    'project_id': assignment['project_id']
+                }
+                notifications.Audit.internal(
+                    notifications.REMOVE_APP_CREDS_FOR_USER, payload
+                )
+
     @MEMOIZE_COMPUTED_ASSIGNMENTS
-    def get_roles_for_user_and_project(self, user_id, tenant_id):
+    def get_roles_for_user_and_project(self, user_id, project_id):
         """Get the roles associated with a user within given project.
 
         This includes roles directly assigned to the user on the
@@ -104,9 +123,29 @@ class Manager(manager.Manager):
             exist.
 
         """
-        self.resource_api.get_project(tenant_id)
+        PROVIDERS.resource_api.get_project(project_id)
         assignment_list = self.list_role_assignments(
-            user_id=user_id, project_id=tenant_id, effective=True)
+            user_id=user_id, project_id=project_id, effective=True)
+        # Use set() to process the list to remove any duplicates
+        return list(set([x['role_id'] for x in assignment_list]))
+
+    @MEMOIZE_COMPUTED_ASSIGNMENTS
+    def get_roles_for_trustor_and_project(self, trustor_id, project_id):
+        """Get the roles associated with a trustor within given project.
+
+        This includes roles directly assigned to the trustor on the
+        project, as well as those by virtue of group membership or
+        inheritance, but it doesn't include the domain roles.
+
+        :returns: a list of role ids.
+        :raises keystone.exception.ProjectNotFound: If the project doesn't
+            exist.
+
+        """
+        PROVIDERS.resource_api.get_project(project_id)
+        assignment_list = self.list_role_assignments(
+            user_id=trustor_id, project_id=project_id, effective=True,
+            strip_domain_roles=False)
         # Use set() to process the list to remove any duplicates
         return list(set([x['role_id'] for x in assignment_list]))
 
@@ -118,7 +157,7 @@ class Manager(manager.Manager):
         :raises keystone.exception.DomainNotFound: If the domain doesn't exist.
 
         """
-        self.resource_api.get_domain(domain_id)
+        PROVIDERS.resource_api.get_domain(domain_id)
         assignment_list = self.list_role_assignments(
             user_id=user_id, domain_id=domain_id, effective=True)
         # Use set() to process the list to remove any duplicates
@@ -132,7 +171,7 @@ class Manager(manager.Manager):
         if not group_ids:
             return []
         if project_id is not None:
-            self.resource_api.get_project(project_id)
+            PROVIDERS.resource_api.get_project(project_id)
             assignment_list = self.list_role_assignments(
                 source_from_group_ids=group_ids, project_id=project_id,
                 effective=True)
@@ -144,23 +183,7 @@ class Manager(manager.Manager):
             raise AttributeError(_("Must specify either domain or project"))
 
         role_ids = list(set([x['role_id'] for x in assignment_list]))
-        return self.role_api.list_roles_from_ids(role_ids)
-
-    def ensure_default_role(self):
-        try:
-            self.role_api.get_role(CONF.member_role_id)
-        except exception.RoleNotFound:
-            LOG.info("Creating the default role %s "
-                     "because it does not exist.",
-                     CONF.member_role_id)
-            role = {'id': CONF.member_role_id,
-                    'name': CONF.member_role_name}
-            try:
-                self.role_api.create_role(CONF.member_role_id, role)
-            except exception.Conflict:
-                LOG.info("Creating the default role %s failed because it "
-                         "was already created",
-                         CONF.member_role_id)
+        return PROVIDERS.role_api.list_roles_from_ids(role_ids)
 
     @notifications.role_assignment('created')
     def _add_role_to_user_and_project_adapter(self, role_id, user_id=None,
@@ -173,13 +196,13 @@ class Manager(manager.Manager):
         # create_grant so that the notifications.role_assignment decorator
         # will work.
 
-        self.resource_api.get_project(project_id)
-        self.role_api.get_role(role_id)
+        PROVIDERS.resource_api.get_project(project_id)
+        PROVIDERS.role_api.get_role(role_id)
         self.driver.add_role_to_user_and_project(user_id, project_id, role_id)
 
-    def add_role_to_user_and_project(self, user_id, tenant_id, role_id):
+    def add_role_to_user_and_project(self, user_id, project_id, role_id):
         self._add_role_to_user_and_project_adapter(
-            role_id, user_id=user_id, project_id=tenant_id)
+            role_id, user_id=user_id, project_id=project_id)
         COMPUTED_ASSIGNMENTS_REGION.invalidate()
 
     # TODO(henry-nash): We might want to consider list limiting this at some
@@ -198,7 +221,7 @@ class Manager(manager.Manager):
         # Use set() to process the list to remove any duplicates
         project_ids = list(set([x['project_id'] for x in assignment_list
                                 if x.get('project_id')]))
-        return self.resource_api.list_projects_from_ids(project_ids)
+        return PROVIDERS.resource_api.list_projects_from_ids(project_ids)
 
     # TODO(henry-nash): We might want to consider list limiting this at some
     # point in the future.
@@ -209,21 +232,21 @@ class Manager(manager.Manager):
         # Use set() to process the list to remove any duplicates
         domain_ids = list(set([x['domain_id'] for x in assignment_list
                                if x.get('domain_id')]))
-        return self.resource_api.list_domains_from_ids(domain_ids)
+        return PROVIDERS.resource_api.list_domains_from_ids(domain_ids)
 
     def list_domains_for_groups(self, group_ids):
         assignment_list = self.list_role_assignments(
             source_from_group_ids=group_ids, effective=True)
         domain_ids = list(set([x['domain_id'] for x in assignment_list
                                if x.get('domain_id')]))
-        return self.resource_api.list_domains_from_ids(domain_ids)
+        return PROVIDERS.resource_api.list_domains_from_ids(domain_ids)
 
     def list_projects_for_groups(self, group_ids):
         assignment_list = self.list_role_assignments(
             source_from_group_ids=group_ids, effective=True)
         project_ids = list(set([x['project_id'] for x in assignment_list
                                if x.get('project_id')]))
-        return self.resource_api.list_projects_from_ids(project_ids)
+        return PROVIDERS.resource_api.list_projects_from_ids(project_ids)
 
     @notifications.role_assignment('deleted')
     def _remove_role_from_user_and_project_adapter(self, role_id, user_id=None,
@@ -239,41 +262,56 @@ class Manager(manager.Manager):
 
         self.driver.remove_role_from_user_and_project(user_id, project_id,
                                                       role_id)
-        if project_id:
-            self._emit_invalidate_grant_token_persistence(user_id, project_id)
-        else:
-            self.identity_api.emit_invalidate_user_token_persistence(user_id)
+        payload = {'user_id': user_id, 'project_id': project_id}
+        notifications.Audit.internal(
+            notifications.REMOVE_APP_CREDS_FOR_USER,
+            payload
+        )
+        self._invalidate_token_cache(
+            role_id, group_id, user_id, project_id, domain_id
+        )
 
-    def remove_role_from_user_and_project(self, user_id, tenant_id, role_id):
+    def remove_role_from_user_and_project(self, user_id, project_id, role_id):
         self._remove_role_from_user_and_project_adapter(
-            role_id, user_id=user_id, project_id=tenant_id)
+            role_id, user_id=user_id, project_id=project_id)
         COMPUTED_ASSIGNMENTS_REGION.invalidate()
 
-    def _emit_invalidate_user_token_persistence(self, user_id):
-        self.identity_api.emit_invalidate_user_token_persistence(user_id)
+    def _invalidate_token_cache(self, role_id, group_id, user_id, project_id,
+                                domain_id):
+        if group_id:
+            actor_type = 'group'
+            actor_id = group_id
+        elif user_id:
+            actor_type = 'user'
+            actor_id = user_id
 
-        # NOTE(lbragstad): The previous notification decorator behavior didn't
-        # send the notification unless the operation was successful. We
-        # maintain that behavior here by calling to the notification module
-        # after the call to emit invalid user tokens.
-        notifications.Audit.internal(
-            notifications.INVALIDATE_USER_TOKEN_PERSISTENCE, user_id
-        )
+        if domain_id:
+            target_type = 'domain'
+            target_id = domain_id
+        elif project_id:
+            target_type = 'project'
+            target_id = project_id
 
-    def _emit_invalidate_grant_token_persistence(self, user_id, project_id):
-        self.identity_api.emit_invalidate_grant_token_persistence(
-            {'user_id': user_id, 'project_id': project_id}
+        reason = (
+            'Invalidating the token cache because role %(role_id)s was '
+            'removed from %(actor_type)s %(actor_id)s on %(target_type)s '
+            '%(target_id)s.' %
+            {'role_id': role_id, 'actor_type': actor_type,
+             'actor_id': actor_id, 'target_type': target_type,
+             'target_id': target_id}
         )
+        notifications.invalidate_token_cache_notification(reason)
 
     @notifications.role_assignment('created')
     def create_grant(self, role_id, user_id=None, group_id=None,
                      domain_id=None, project_id=None,
-                     inherited_to_projects=False, context=None):
-        role = self.role_api.get_role(role_id)
+                     inherited_to_projects=False,
+                     initiator=None):
+        role = PROVIDERS.role_api.get_role(role_id)
         if domain_id:
-            self.resource_api.get_domain(domain_id)
+            PROVIDERS.resource_api.get_domain(domain_id)
         if project_id:
-            project = self.resource_api.get_project(project_id)
+            project = PROVIDERS.resource_api.get_project(project_id)
 
             # For domain specific roles, the domain of the project
             # and role must match
@@ -291,11 +329,11 @@ class Manager(manager.Manager):
     def get_grant(self, role_id, user_id=None, group_id=None,
                   domain_id=None, project_id=None,
                   inherited_to_projects=False):
-        role_ref = self.role_api.get_role(role_id)
+        role_ref = PROVIDERS.role_api.get_role(role_id)
         if domain_id:
-            self.resource_api.get_domain(domain_id)
+            PROVIDERS.resource_api.get_domain(domain_id)
         if project_id:
-            self.resource_api.get_project(project_id)
+            PROVIDERS.resource_api.get_project(project_id)
         self.check_grant_role_id(
             role_id, user_id=user_id, group_id=group_id, domain_id=domain_id,
             project_id=project_id, inherited_to_projects=inherited_to_projects
@@ -306,26 +344,23 @@ class Manager(manager.Manager):
                     domain_id=None, project_id=None,
                     inherited_to_projects=False):
         if domain_id:
-            self.resource_api.get_domain(domain_id)
+            PROVIDERS.resource_api.get_domain(domain_id)
         if project_id:
-            self.resource_api.get_project(project_id)
+            PROVIDERS.resource_api.get_project(project_id)
         grant_ids = self.list_grant_role_ids(
             user_id=user_id, group_id=group_id, domain_id=domain_id,
             project_id=project_id, inherited_to_projects=inherited_to_projects
         )
-        return self.role_api.list_roles_from_ids(grant_ids)
-
-    def _emit_revoke_user_grant(self, role_id, user_id, domain_id, project_id,
-                                inherited_to_projects, context):
-        self._emit_invalidate_grant_token_persistence(user_id, project_id)
+        return PROVIDERS.role_api.list_roles_from_ids(grant_ids)
 
     @notifications.role_assignment('deleted')
     def delete_grant(self, role_id, user_id=None, group_id=None,
                      domain_id=None, project_id=None,
-                     inherited_to_projects=False, context=None):
+                     inherited_to_projects=False,
+                     initiator=None):
 
         # check if role exist before any processing
-        self.role_api.get_role(role_id)
+        PROVIDERS.role_api.get_role(role_id)
 
         if group_id is None:
             # check if role exists on the user before revoke
@@ -334,9 +369,9 @@ class Manager(manager.Manager):
                 project_id=project_id,
                 inherited_to_projects=inherited_to_projects
             )
-            self._emit_revoke_user_grant(
-                role_id, user_id, domain_id, project_id,
-                inherited_to_projects, context)
+            self._invalidate_token_cache(
+                role_id, group_id, user_id, project_id, domain_id
+            )
         else:
             try:
                 # check if role exists on the group before revoke
@@ -346,21 +381,17 @@ class Manager(manager.Manager):
                     inherited_to_projects=inherited_to_projects
                 )
                 if CONF.token.revoke_by_id:
-                    # NOTE(morganfainberg): The user ids are the important part
-                    # for invalidating tokens below, so extract them here.
-                    for user in self.identity_api.list_users_in_group(
-                            group_id):
-                        self._emit_revoke_user_grant(
-                            role_id, user['id'], domain_id, project_id,
-                            inherited_to_projects, context)
+                    self._invalidate_token_cache(
+                        role_id, group_id, user_id, project_id, domain_id
+                    )
             except exception.GroupNotFound:
                 LOG.debug('Group %s not found, no tokens to invalidate.',
                           group_id)
 
         if domain_id:
-            self.resource_api.get_domain(domain_id)
+            PROVIDERS.resource_api.get_domain(domain_id)
         if project_id:
-            self.resource_api.get_project(project_id)
+            PROVIDERS.resource_api.get_project(project_id)
         self.driver.delete_grant(
             role_id, user_id=user_id, group_id=group_id, domain_id=domain_id,
             project_id=project_id, inherited_to_projects=inherited_to_projects
@@ -450,7 +481,8 @@ class Manager(manager.Manager):
             # if a group wasn't found in the backend, users are set
             # as empty list.
             try:
-                users = self.identity_api.list_users_in_group(ref['group_id'])
+                users = PROVIDERS.identity_api.list_users_in_group(
+                    ref['group_id'])
             except exception.GroupNotFound:
                 LOG.warning('Group %(group)s was not found but still has role '
                             'assignments.', {'group': ref['group_id']})
@@ -545,24 +577,25 @@ class Manager(manager.Manager):
                     # again all the project_ids will get the assignment.  If,
                     # however, the assignment point is within the subtree,
                     # then only a partial tree will get the assignment.
+                    resource_api = PROVIDERS.resource_api
                     if ref.get('project_id'):
                         if ref['project_id'] in project_ids:
                             project_ids = (
                                 [x['id'] for x in
-                                    self.resource_api.list_projects_in_subtree(
-                                        ref['project_id'])])
+                                 resource_api.list_projects_in_subtree(
+                                     ref['project_id'])])
             elif ref.get('domain_id'):
                 # A domain inherited assignment, so apply it to all projects
                 # in this domain
                 project_ids = (
                     [x['id'] for x in
-                        self.resource_api.list_projects_in_domain(
+                        PROVIDERS.resource_api.list_projects_in_domain(
                             ref['domain_id'])])
             else:
                 # It must be a project assignment, so apply it to its subtree
                 project_ids = (
                     [x['id'] for x in
-                        self.resource_api.list_projects_in_subtree(
+                        PROVIDERS.resource_api.list_projects_in_subtree(
                             ref['project_id'])])
 
             new_refs = []
@@ -613,8 +646,6 @@ class Manager(manager.Manager):
             indirect['role_id'] = prior_ref['role_id']
             return implied_ref
 
-        if not CONF.token.infer_roles:
-            return role_refs
         try:
             implied_roles_cache = {}
             role_refs_to_check = list(role_refs)
@@ -628,16 +659,15 @@ class Manager(manager.Manager):
                     implied_roles = implied_roles_cache[next_role_id]
                 else:
                     implied_roles = (
-                        self.role_api.list_implied_roles(next_role_id))
+                        PROVIDERS.role_api.list_implied_roles(next_role_id))
                     implied_roles_cache[next_role_id] = implied_roles
                 for implied_role in implied_roles:
                     implied_ref = (
                         _make_implied_ref_copy(
                             next_ref, implied_role['implied_role_id']))
                     if implied_ref in checked_role_refs:
-                        msg = ('Circular reference found '
-                               'role inference rules - %(prior_role_id)s.')
-                        LOG.error(msg, {'prior_role_id': next_ref['role_id']})
+                        # Avoid traversing a cycle
+                        continue
                     else:
                         ref_results.append(implied_ref)
                         role_refs_to_check.append(implied_ref)
@@ -663,7 +693,7 @@ class Manager(manager.Manager):
 
         """
         def _role_is_global(role_id):
-            ref = self.role_api.get_role(role_id)
+            ref = PROVIDERS.role_api.get_role(role_id)
             return (ref['domain_id'] is None)
 
         filter_results = []
@@ -758,7 +788,7 @@ class Manager(manager.Manager):
                     # their parents projects.
 
                     # List inherited assignments from the project's domain
-                    proj_domain_id = self.resource_api.get_project(
+                    proj_domain_id = PROVIDERS.resource_api.get_project(
                         project_id)['domain_id']
                     inherited_refs += self.driver.list_role_assignments(
                         role_id=role_id, domain_id=proj_domain_id,
@@ -770,7 +800,7 @@ class Manager(manager.Manager):
                     # come from are from parents of the main project or
                     # inherited assignments on the project or subtree itself.
                     source_ids = [project['id'] for project in
-                                  self.resource_api.list_project_parents(
+                                  PROVIDERS.resource_api.list_project_parents(
                                       project_id)]
                     if subtree_ids:
                         source_ids += project_ids_of_interest
@@ -839,7 +869,7 @@ class Manager(manager.Manager):
 
         return refs
 
-    def _list_direct_role_assignments(self, role_id, user_id, group_id,
+    def _list_direct_role_assignments(self, role_id, user_id, group_id, system,
                                       domain_id, project_id, subtree_ids,
                                       inherited):
         """List role assignments without applying expansion.
@@ -857,13 +887,56 @@ class Manager(manager.Manager):
             else:
                 project_ids_of_interest = [project_id]
 
-        return self.driver.list_role_assignments(
-            role_id=role_id, user_id=user_id, group_ids=group_ids,
-            domain_id=domain_id, project_ids=project_ids_of_interest,
-            inherited_to_projects=inherited)
+        project_and_domain_assignments = []
+        if not system:
+            project_and_domain_assignments = self.driver.list_role_assignments(
+                role_id=role_id, user_id=user_id, group_ids=group_ids,
+                domain_id=domain_id, project_ids=project_ids_of_interest,
+                inherited_to_projects=inherited)
+
+        system_assignments = []
+        if system or (not project_id and not domain_id and not system):
+            if user_id:
+                assignments = self.list_system_grants_for_user(user_id)
+                for assignment in assignments:
+                    system_assignments.append(
+                        {'system': {'all': True},
+                         'user_id': user_id,
+                         'role_id': assignment['id']}
+                    )
+            elif group_id:
+                assignments = self.list_system_grants_for_group(group_id)
+                for assignment in assignments:
+                    system_assignments.append(
+                        {'system': {'all': True},
+                         'group_id': group_id,
+                         'role_id': assignment['id']}
+                    )
+            else:
+                assignments = self.list_all_system_grants()
+                for assignment in assignments:
+                    a = {}
+                    if assignment['type'] == self._GROUP_SYSTEM:
+                        a['group_id'] = assignment['actor_id']
+                    elif assignment['type'] == self._USER_SYSTEM:
+                        a['user_id'] = assignment['actor_id']
+                    a['role_id'] = assignment['role_id']
+                    a['system'] = {'all': True}
+                    system_assignments.append(a)
+
+            for i, assignment in enumerate(system_assignments):
+                if role_id and role_id != assignment['role_id']:
+                    system_assignments.pop(i)
+
+        assignments = []
+        for assignment in itertools.chain(
+                project_and_domain_assignments, system_assignments):
+            assignments.append(assignment)
+
+        return assignments
 
     def list_role_assignments(self, role_id=None, user_id=None, group_id=None,
-                              domain_id=None, project_id=None,
+                              system=None, domain_id=None, project_id=None,
                               include_subtree=False, inherited=None,
                               effective=None, include_names=False,
                               source_from_group_ids=None,
@@ -909,7 +982,11 @@ class Manager(manager.Manager):
         if project_id and include_subtree:
             subtree_ids = (
                 [x['id'] for x in
-                    self.resource_api.list_projects_in_subtree(project_id)])
+                    PROVIDERS.resource_api.list_projects_in_subtree(
+                        project_id)])
+
+        if system != 'all':
+            system = None
 
         if effective:
             role_assignments = self._list_effective_role_assignments(
@@ -918,7 +995,7 @@ class Manager(manager.Manager):
                 strip_domain_roles)
         else:
             role_assignments = self._list_direct_role_assignments(
-                role_id, user_id, group_id, domain_id, project_id,
+                role_id, user_id, group_id, system, domain_id, project_id,
                 subtree_ids, inherited)
 
         if include_names:
@@ -932,14 +1009,14 @@ class Manager(manager.Manager):
             new_assign = copy.deepcopy(role_asgmt)
             for key, value in role_asgmt.items():
                 if key == 'domain_id':
-                    _domain = self.resource_api.get_domain(value)
+                    _domain = PROVIDERS.resource_api.get_domain(value)
                     new_assign['domain_name'] = _domain['name']
                 elif key == 'user_id':
                     try:
                         # Note(knikolla): Try to get the user, otherwise
                         # if the user wasn't found in the backend
                         # use empty values.
-                        _user = self.identity_api.get_user(value)
+                        _user = PROVIDERS.identity_api.get_user(value)
                     except exception.UserNotFound:
                         msg = ('User %(user)s not found in the'
                                ' backend but still has role assignments.')
@@ -951,14 +1028,14 @@ class Manager(manager.Manager):
                         new_assign['user_name'] = _user['name']
                         new_assign['user_domain_id'] = _user['domain_id']
                         new_assign['user_domain_name'] = (
-                            self.resource_api.get_domain(_user['domain_id'])
-                            ['name'])
+                            PROVIDERS.resource_api.get_domain(
+                                _user['domain_id'])['name'])
                 elif key == 'group_id':
                     try:
                         # Note(knikolla): Try to get the group, otherwise
                         # if the group wasn't found in the backend
                         # use empty values.
-                        _group = self.identity_api.get_group(value)
+                        _group = PROVIDERS.identity_api.get_group(value)
                     except exception.GroupNotFound:
                         msg = ('Group %(group)s not found in the'
                                ' backend but still has role assignments.')
@@ -970,99 +1047,209 @@ class Manager(manager.Manager):
                         new_assign['group_name'] = _group['name']
                         new_assign['group_domain_id'] = _group['domain_id']
                         new_assign['group_domain_name'] = (
-                            self.resource_api.get_domain(_group['domain_id'])
-                            ['name'])
+                            PROVIDERS.resource_api.get_domain(
+                                _group['domain_id'])['name'])
                 elif key == 'project_id':
-                    _project = self.resource_api.get_project(value)
+                    _project = PROVIDERS.resource_api.get_project(value)
                     new_assign['project_name'] = _project['name']
                     new_assign['project_domain_id'] = _project['domain_id']
                     new_assign['project_domain_name'] = (
-                        self.resource_api.get_domain(_project['domain_id'])
-                        ['name'])
+                        PROVIDERS.resource_api.get_domain(
+                            _project['domain_id'])['name'])
                 elif key == 'role_id':
-                    _role = self.role_api.get_role(value)
+                    _role = PROVIDERS.role_api.get_role(value)
                     new_assign['role_name'] = _role['name']
                     if _role['domain_id'] is not None:
                         new_assign['role_domain_id'] = _role['domain_id']
                         new_assign['role_domain_name'] = (
-                            self.resource_api.get_domain(_role['domain_id'])
-                            ['name'])
+                            PROVIDERS.resource_api.get_domain(
+                                _role['domain_id'])['name'])
             role_assign_list.append(new_assign)
         return role_assign_list
 
-    def delete_tokens_for_role_assignments(self, role_id):
-        assignments = self.list_role_assignments(role_id=role_id)
+    def delete_group_assignments(self, group_id):
+        # FIXME(lbragstad): This should be refactored in the Rocky release so
+        # that we can pass the group_id to the system assignment backend like
+        # we do with the project and domain assignment backend. Holding off on
+        # this because it will require an interface change to the backend,
+        # making it harder to backport for Queens RC.
+        self.driver.delete_group_assignments(group_id)
+        system_assignments = self.list_system_grants_for_group(group_id)
+        for assignment in system_assignments:
+            self.delete_system_grant_for_group(group_id, assignment['id'])
 
-        # Iterate over the assignments for this role and build the list of
-        # user or user+project IDs for the tokens we need to delete
-        user_ids = set()
-        user_and_project_ids = list()
-        for assignment in assignments:
-            # If we have a project assignment, then record both the user and
-            # project IDs so we can target the right token to delete. If it is
-            # a domain assignment, we might as well kill all the tokens for
-            # the user, since in the vast majority of cases all the tokens
-            # for a user will be within one domain anyway, so not worth
-            # trying to delete tokens for each project in the domain.
-            if 'user_id' in assignment:
-                if 'project_id' in assignment:
-                    user_and_project_ids.append(
-                        (assignment['user_id'], assignment['project_id']))
-                elif 'domain_id' in assignment:
-                    self._emit_invalidate_user_token_persistence(
-                        assignment['user_id'])
-            elif 'group_id' in assignment:
-                # Add in any users for this group, being tolerant of any
-                # cross-driver database integrity errors.
-                try:
-                    users = self.identity_api.list_users_in_group(
-                        assignment['group_id'])
-                except exception.GroupNotFound:
-                    # Ignore it, but log a debug message
-                    if 'project_id' in assignment:
-                        target = _('Project (%s)') % assignment['project_id']
-                    elif 'domain_id' in assignment:
-                        target = _('Domain (%s)') % assignment['domain_id']
-                    else:
-                        target = _('Unknown Target')
-                    msg = ('Group (%(group)s), referenced in assignment '
-                           'for %(target)s, not found - ignoring.')
-                    LOG.debug(msg, {'group': assignment['group_id'],
-                                    'target': target})
-                    continue
+    def delete_user_assignments(self, user_id):
+        # FIXME(lbragstad): This should be refactored in the Rocky release so
+        # that we can pass the user_id to the system assignment backend like we
+        # do with the project and domain assignment backend. Holding off on
+        # this because it will require an interface change to the backend,
+        # making it harder to backport for Queens RC.
+        self.driver.delete_user_assignments(user_id)
+        system_assignments = self.list_system_grants_for_user(user_id)
+        for assignment in system_assignments:
+            self.delete_system_grant_for_user(user_id, assignment['id'])
 
-                if 'project_id' in assignment:
-                    for user in users:
-                        user_and_project_ids.append(
-                            (user['id'], assignment['project_id']))
-                elif 'domain_id' in assignment:
-                    for user in users:
-                        self._emit_invalidate_user_token_persistence(
-                            user['id'])
+    def check_system_grant_for_user(self, user_id, role_id):
+        """Check if a user has a specific role on the system.
 
-        # Now process the built up lists.  Before issuing calls to delete any
-        # tokens, let's try and minimize the number of calls by pruning out
-        # any user+project deletions where a general token deletion for that
-        # same user is also planned.
-        user_and_project_ids_to_action = []
-        for user_and_project_id in user_and_project_ids:
-            if user_and_project_id[0] not in user_ids:
-                user_and_project_ids_to_action.append(user_and_project_id)
+        :param user_id: the ID of the user in the assignment
+        :param role_id: the ID of the system role in the assignment
 
-        for user_id, project_id in user_and_project_ids_to_action:
-            payload = {'user_id': user_id, 'project_id': project_id}
-            notifications.Audit.internal(
-                notifications.INVALIDATE_USER_PROJECT_TOKEN_PERSISTENCE,
-                payload
+        :raises keystone.exception.RoleAssignmentNotFound: if the user doesn't
+            have a role assignment matching the role_id on the system
+
+        """
+        target_id = self._SYSTEM_SCOPE_TOKEN
+        inherited = False
+        return self.driver.check_system_grant(
+            role_id, user_id, target_id, inherited
+        )
+
+    def list_system_grants_for_user(self, user_id):
+        """Return a list of roles the user has on the system.
+
+        :param user_id: the ID of the user
+
+        :returns: a list of role assignments the user has system-wide
+
+        """
+        target_id = self._SYSTEM_SCOPE_TOKEN
+        assignment_type = self._USER_SYSTEM
+        grants = self.driver.list_system_grants(
+            user_id, target_id, assignment_type
+        )
+        grant_ids = []
+        for grant in grants:
+            grant_ids.append(grant['role_id'])
+
+        return PROVIDERS.role_api.list_roles_from_ids(grant_ids)
+
+    def create_system_grant_for_user(self, user_id, role_id):
+        """Grant a user a role on the system.
+
+        :param user_id: the ID of the user
+        :param role_id: the ID of the role to grant on the system
+
+        """
+        role = PROVIDERS.role_api.get_role(role_id)
+        if role.get('domain_id'):
+            raise exception.ValidationError(
+                'Role %(role_id)s is a domain-specific role. Unable to use '
+                'a domain-specific role in a system assignment.' % {
+                    'role_id': role_id
+                }
             )
+        target_id = self._SYSTEM_SCOPE_TOKEN
+        assignment_type = self._USER_SYSTEM
+        inherited = False
+        self.driver.create_system_grant(
+            role_id, user_id, target_id, assignment_type, inherited
+        )
+
+    def delete_system_grant_for_user(self, user_id, role_id):
+        """Remove a system grant from a user.
+
+        :param user_id: the ID of the user
+        :param role_id: the ID of the role to remove from the user on the
+                        system
+
+        :raises keystone.exception.RoleAssignmentNotFound: if the user doesn't
+            have a role assignment with role_id on the system
+
+        """
+        target_id = self._SYSTEM_SCOPE_TOKEN
+        inherited = False
+        self.driver.delete_system_grant(role_id, user_id, target_id, inherited)
+
+    def check_system_grant_for_group(self, group_id, role_id):
+        """Check if a group has a specific role on the system.
+
+        :param group_id: the ID of the group in the assignment
+        :param role_id: the ID of the system role in the assignment
+
+        :raises keystone.exception.RoleAssignmentNotFound: if the group doesn't
+            have a role assignment matching the role_id on the system
+
+        """
+        target_id = self._SYSTEM_SCOPE_TOKEN
+        inherited = False
+        return self.driver.check_system_grant(
+            role_id, group_id, target_id, inherited
+        )
+
+    def list_system_grants_for_group(self, group_id):
+        """Return a list of roles the group has on the system.
+
+        :param group_id: the ID of the group
+
+        :returns: a list of role assignments the group has system-wide
+
+        """
+        target_id = self._SYSTEM_SCOPE_TOKEN
+        assignment_type = self._GROUP_SYSTEM
+        grants = self.driver.list_system_grants(
+            group_id, target_id, assignment_type
+        )
+        grant_ids = []
+        for grant in grants:
+            grant_ids.append(grant['role_id'])
+
+        return PROVIDERS.role_api.list_roles_from_ids(grant_ids)
+
+    def create_system_grant_for_group(self, group_id, role_id):
+        """Grant a group a role on the system.
+
+        :param group_id: the ID of the group
+        :param role_id: the ID of the role to grant on the system
+
+        """
+        role = PROVIDERS.role_api.get_role(role_id)
+        if role.get('domain_id'):
+            raise exception.ValidationError(
+                'Role %(role_id)s is a domain-specific role. Unable to use '
+                'a domain-specific role in a system assignment.' % {
+                    'role_id': role_id
+                }
+            )
+        target_id = self._SYSTEM_SCOPE_TOKEN
+        assignment_type = self._GROUP_SYSTEM
+        inherited = False
+        self.driver.create_system_grant(
+            role_id, group_id, target_id, assignment_type, inherited
+        )
+
+    def delete_system_grant_for_group(self, group_id, role_id):
+        """Remove a system grant from a group.
+
+        :param group_id: the ID of the group
+        :param role_id: the ID of the role to remove from the group on the
+                        system
+
+        :raises keystone.exception.RoleAssignmentNotFound: if the group doesn't
+            have a role assignment with role_id on the system
+
+        """
+        target_id = self._SYSTEM_SCOPE_TOKEN
+        inherited = False
+        self.driver.delete_system_grant(
+            role_id, group_id, target_id, inherited
+        )
+
+    def list_all_system_grants(self):
+        """Return a list of all system grants."""
+        actor_id = None
+        target_id = self._SYSTEM_SCOPE_TOKEN
+        assignment_type = None
+        return self.driver.list_system_grants(
+            actor_id, target_id, assignment_type
+        )
 
 
-@dependency.provider('role_api')
-@dependency.requires('assignment_api')
 class RoleManager(manager.Manager):
     """Default pivot point for the Role backend."""
 
     driver_namespace = 'keystone.role'
+    _provides_api = 'role_api'
 
     _ROLE = 'role'
 
@@ -1072,39 +1259,33 @@ class RoleManager(manager.Manager):
         role_driver = CONF.role.driver
 
         if role_driver is None:
-            assignment_manager = dependency.get_provider('assignment_api')
-            role_driver = assignment_manager.default_role_driver()
+            # Explicitly load the assignment manager object
+            assignment_driver = CONF.assignment.driver
+            assignment_manager_obj = manager.load_driver(
+                Manager.driver_namespace,
+                assignment_driver)
+            role_driver = assignment_manager_obj.default_role_driver()
 
         super(RoleManager, self).__init__(role_driver)
 
-    def _append_null_domain_id(f):
-        """Append a domain_id field to a role dict if it is not already there.
-
-        When caching is turned on, upgrading from liberty to
-        mitaka or master causes tokens to fail to be issued for the
-        time-to-live of the cache. This is because as part of the token
-        issuance the token's role is looked up, and the cached version of the
-        role immediately after upgrade does not have a domain_id field, even
-        though that column was successfully added to the role database. This
-        decorator artificially adds a null domain_id value to the role
-        reference so that the cached value acts like the updated schema.
-
-        Note: This decorator must appear before the @MEMOIZE decorator
-        because it operates on the cached value returned by the MEMOIZE
-        function.
-        """
-        @functools.wraps(f)
-        def wrapper(self, *args, **kwargs):
-            ref = f(self, *args, **kwargs)
-            if 'domain_id' not in ref:
-                ref['domain_id'] = None
-            return ref
-        return wrapper
-
-    @_append_null_domain_id
     @MEMOIZE
     def get_role(self, role_id):
         return self.driver.get_role(role_id)
+
+    def get_unique_role_by_name(self, role_name, hints=None):
+        if not hints:
+            hints = driver_hints.Hints()
+        hints.add_filter("name", role_name, case_sensitive=True)
+        found_roles = PROVIDERS.role_api.list_roles(hints)
+        if not found_roles:
+            raise exception.RoleNotFound(
+                _("Role %s is not defined") % role_name
+            )
+        elif len(found_roles) == 1:
+            return {'id': found_roles[0]['id']}
+        else:
+            raise exception.AmbiguityError(resource='role',
+                                           name=role_name)
 
     def create_role(self, role_id, role, initiator=None):
         ret = self.driver.create_role(role_id, role)
@@ -1130,11 +1311,20 @@ class RoleManager(manager.Manager):
         return ret
 
     def delete_role(self, role_id, initiator=None):
-        self.assignment_api.delete_tokens_for_role_assignments(role_id)
-        self.assignment_api.delete_role_assignments(role_id)
+        PROVIDERS.assignment_api.delete_role_assignments(role_id)
+        PROVIDERS.assignment_api._send_app_cred_notification_for_role_removal(
+            role_id
+        )
         self.driver.delete_role(role_id)
         notifications.Audit.deleted(self._ROLE, role_id, initiator)
         self.get_role.invalidate(self, role_id)
+        reason = (
+            'Invalidating the token cache because role %(role_id)s has been '
+            'removed. Role assignments for users will be recalculated and '
+            'enforced accordingly the next time they authenticate or validate '
+            'a token' % {'role_id': role_id}
+        )
+        notifications.invalidate_token_cache_notification(reason)
         COMPUTED_ASSIGNMENTS_REGION.invalidate()
 
     # TODO(ayoung): Add notification

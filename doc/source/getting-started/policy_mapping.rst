@@ -25,6 +25,20 @@ identity:create_endpoint                                   POST /v3/endpoints
 identity:update_endpoint                                   PATCH /v3/endpoints/{endpoint_id}
 identity:delete_endpoint                                   DELETE /v3/endpoints/{endpoint_id}
 
+identity:get_registered_limit                              GET /v3/registered_limits/{registered_limit_id}
+identity:list_registered_limits                            GET /v3/registered_limits
+identity:create_registered_limits                          POST /v3/registered_limits
+identity:update_registered_limit                           PATCH /v3/registered_limits/{registered_limit_id}
+identity:delete_registered_limit                           DELETE /v3/registered_limits/{registered_limit_id}
+
+identity:get_limit                                         GET /v3/limits/{limit_id}
+identity:list_limits                                       GET /v3/limits
+identity:create_limits                                     POST /v3/limits
+identity:update_limit                                      PATCH /v3/limits/{limit_id}
+identity:delete_limit                                      DELETE /v3/limits/{limit_id}
+identity:get_limit_model                                   GET /v3/limits/model
+                                                           HEAD /v3/limits/model
+
 identity:get_domain                                        GET /v3/domains/{domain_id}
 identity:list_domains                                      GET /v3/domains
 identity:create_domain                                     POST /v3/domains
@@ -99,6 +113,16 @@ identity:list_grants                                       GET `grant_collection
 identity:create_grant                                      PUT `grant_resources`_
 identity:revoke_grant                                      DELETE `grant_resources`_
 
+identity:list_system_grants_for_user                       GET /v3/system/users/{user_id}/roles
+identity:check_system_grant_for_user                       GET /v3/system/users/{user_id}/roles/{role_id}
+identity:create_system_grant_for_user                      PUT /v3/system/users/{user_id}/roles/{role_id}
+identity:revoke_system_grant_for_user                      DELETE /v3/system/users/{user_id}/roles/{role_id}
+
+identity:list_system_grants_for_group                      GET /v3/system/groups/{group_id}/roles
+identity:check_system_grant_for_group                      GET /v3/system/groups/{group_id}/roles/{role_id}
+identity:create_system_grant_for_group                     PUT /v3/system/groups/{group_id}/roles/{role_id}
+identity:revoke_system_grant_for_group                     DELETE /v3/system/groups/{group_id}/roles/{role_id}
+
 identity:list_role_assignments                             GET /v3/role_assignments
 identity:list_role_assignments_for_tree                    GET /v3/role_assignments?include_subtree
 
@@ -109,11 +133,8 @@ identity:update_policy                                     PATCH /v3/policy/{pol
 identity:delete_policy                                     DELETE /v3/policy/{policy_id}
 
 identity:check_token                                       HEAD /v3/auth/tokens
-identity:validate_token                                    - GET /v2.0/tokens/{token_id}
-                                                           - GET /v3/auth/tokens
-identity:validate_token_head                               HEAD /v2.0/tokens/{token_id}
-identity:revocation_list                                   - GET /v2.0/tokens/revoked
-                                                           - GET /v3/auth/tokens/OS-PKI/revoked
+identity:validate_token                                    GET /v3/auth/tokens
+identity:revocation_list                                   GET /v3/auth/tokens/OS-PKI/revoked
 identity:revoke_token                                      DELETE /v3/auth/tokens
 identity:create_trust                                      POST /v3/OS-TRUST/trusts
 identity:list_trusts                                       GET /v3/OS-TRUST/trusts
@@ -180,6 +201,7 @@ identity:delete_service_provider                           DELETE /v3/OS-FEDERAT
 identity:get_auth_catalog                                  GET /v3/auth/catalog
 identity:get_auth_projects                                 GET /v3/auth/projects
 identity:get_auth_domains                                  GET /v3/auth/domains
+identity:get_auth_system                                   GET /v3/auth/system
 
 identity:list_projects_for_user                            GET /v3/OS-FEDERATION/projects
 identity:list_domains_for_user                             GET /v3/OS-FEDERATION/domains
@@ -199,20 +221,24 @@ identity:get_policy_for_endpoint                           GET /v3/endpoints/{en
 identity:list_endpoints_for_policy                         GET /v3/policies/{policy_id}/OS-ENDPOINT-POLICY/endpoints
 
 identity:create_domain_config                              PUT /v3/domains/{domain_id}/config
-identity:get_domain_config                                 - GET /v3/domains/{domain_id}/config
-                                                           - GET /v3/domains/{domain_id}/config/{group}
-                                                           - GET /v3/domains/{domain_id}/config/{group}/{option}
-identity:get_security_compliance_domain_config             - GET /v3/domains/{domain_id}/config/security_compliance
-                                                           - GET /v3/domains/{domain_id}/config/security_compliance/{option}
-identity:update_domain_config                              - PATCH /v3/domains/{domain_id}/config
-                                                           - PATCH /v3/domains/{domain_id}/config/{group}
-                                                           - PATCH /v3/domains/{domain_id}/config/{group}/{option}
-identity:delete_domain_config                              - DELETE /v3/domains/{domain_id}/config
-                                                           - DELETE /v3/domains/{domain_id}/config/{group}
-                                                           - DELETE /v3/domains/{domain_id}/config/{group}/{option}
-identity:get_domain_config_default                         - GET /v3/domains/config/default
-                                                           - GET /v3/domains/config/{group}/default
-                                                           - GET /v3/domains/config/{group}/{option}/default
+identity:get_domain_config                                 GET /v3/domains/{domain_id}/config
+                                                           GET /v3/domains/{domain_id}/config/{group}
+                                                           GET /v3/domains/{domain_id}/config/{group}/{option}
+identity:get_security_compliance_domain_config             GET /v3/domains/{domain_id}/config/security_compliance
+                                                           GET /v3/domains/{domain_id}/config/security_compliance/{option}
+identity:update_domain_config                              PATCH /v3/domains/{domain_id}/config
+                                                           PATCH /v3/domains/{domain_id}/config/{group}
+                                                           PATCH /v3/domains/{domain_id}/config/{group}/{option}
+identity:delete_domain_config                              DELETE /v3/domains/{domain_id}/config
+                                                           DELETE /v3/domains/{domain_id}/config/{group}
+                                                           DELETE /v3/domains/{domain_id}/config/{group}/{option}
+identity:get_domain_config_default                         GET /v3/domains/config/default
+                                                           GET /v3/domains/config/{group}/default
+                                                           GET /v3/domains/config/{group}/{option}/default
+identity:get_application_credential                        GET /v3/users/{user_id}/application_credentials/{application_credential_id}
+identity:list_application_credentials                      GET /v3/users/{user_id}/application_credentials
+identity:create_application_credential                     POST /v3/users/{user_id}/application_credential
+identity:delete_application_credential                     DELETE /v3/users/{user_id}/application_credential/{application_credential_id}
 =========================================================  ===
 
 .. _grant_resources:

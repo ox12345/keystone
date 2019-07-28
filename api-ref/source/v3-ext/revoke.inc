@@ -8,7 +8,7 @@ This API provides a list of token revocations. Each event expresses a set of
 criteria which describes a set of tokens that are no longer valid.
 Requires v3.2+ of the Identity API.
 
-What’s New in v1.1
+What's New in v1.1
 ==================
 
 * Use of expires_at has been deprecated in favor of using audit_id and audit_chain_id.
@@ -42,23 +42,21 @@ The HTTP Date header returned in the response reflects the timestamp of the
 most recently issued revocation event. Clients can then use this value in the
 since query parameter to limit the list of events in subsequent requests.
 
-Normal response codes: 200
-
 Request
 -------
+
+Parameters
+~~~~~~~~~~
 
 .. rest_parameters:: parameters.yaml
 
    - since: since_query
 
-Request Example
----------------
+Response
+--------
 
-.. literalinclude:: samples/OS-REVOKE/list-revoke-response.json
-   :language: javascript
-
-Response Parameters
--------------------
+Parameters
+~~~~~~~~~~
 
 .. rest_parameters:: parameters.yaml
 
@@ -73,3 +71,16 @@ Response Parameters
    - OS-TRUST:trust_id: revoke_trust_id
    - OS-OAUTH1:consumer_id: revoke_consumer_id
    - expires_at: revoke_expires_at
+
+Status Codes
+~~~~~~~~~~~~
+
+.. rest_status_code:: success ../v3/status.yaml
+
+   - 200
+
+Example
+~~~~~~~
+
+.. literalinclude:: samples/OS-REVOKE/list-revoke-response.json
+   :language: javascript

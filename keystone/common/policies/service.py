@@ -10,41 +10,91 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+from oslo_log import versionutils
 from oslo_policy import policy
 
 from keystone.common.policies import base
 
+deprecated_get_service = policy.DeprecatedRule(
+    name=base.IDENTITY % 'get_service',
+    check_str=base.RULE_ADMIN_REQUIRED
+)
+deprecated_list_service = policy.DeprecatedRule(
+    name=base.IDENTITY % 'list_services',
+    check_str=base.RULE_ADMIN_REQUIRED
+)
+deprecated_update_service = policy.DeprecatedRule(
+    name=base.IDENTITY % 'update_service',
+    check_str=base.RULE_ADMIN_REQUIRED
+)
+deprecated_create_service = policy.DeprecatedRule(
+    name=base.IDENTITY % 'create_service',
+    check_str=base.RULE_ADMIN_REQUIRED
+)
+deprecated_delete_service = policy.DeprecatedRule(
+    name=base.IDENTITY % 'delete_service',
+    check_str=base.RULE_ADMIN_REQUIRED
+)
+
+DEPRECATED_REASON = """
+As of the Stein release, the service API now understands default roles and
+system-scoped tokens, making the API more granular by default without
+compromising security. The new policy defaults account for these changes
+automatically. Be sure to take these new defaults into consideration if you are
+relying on overrides in your deployment for the service API.
+"""
+
 service_policies = [
     policy.DocumentedRuleDefault(
         name=base.IDENTITY % 'get_service',
-        check_str=base.RULE_ADMIN_REQUIRED,
+        check_str=base.SYSTEM_READER,
+        scope_types=['system'],
         description='Show service details.',
         operations=[{'path': '/v3/services/{service_id}',
-                     'method': 'GET'}]),
+                     'method': 'GET'}],
+        deprecated_rule=deprecated_get_service,
+        deprecated_reason=DEPRECATED_REASON,
+        deprecated_since=versionutils.deprecated.STEIN),
     policy.DocumentedRuleDefault(
         name=base.IDENTITY % 'list_services',
-        check_str=base.RULE_ADMIN_REQUIRED,
+        check_str=base.SYSTEM_READER,
+        scope_types=['system'],
         description='List services.',
         operations=[{'path': '/v3/services',
-                     'method': 'GET'}]),
+                     'method': 'GET'}],
+        deprecated_rule=deprecated_list_service,
+        deprecated_reason=DEPRECATED_REASON,
+        deprecated_since=versionutils.deprecated.STEIN),
     policy.DocumentedRuleDefault(
         name=base.IDENTITY % 'create_service',
-        check_str=base.RULE_ADMIN_REQUIRED,
+        check_str=base.SYSTEM_ADMIN,
+        scope_types=['system'],
         description='Create service.',
         operations=[{'path': '/v3/services',
-                     'method': 'POST'}]),
+                     'method': 'POST'}],
+        deprecated_rule=deprecated_create_service,
+        deprecated_reason=DEPRECATED_REASON,
+        deprecated_since=versionutils.deprecated.STEIN),
     policy.DocumentedRuleDefault(
         name=base.IDENTITY % 'update_service',
-        check_str=base.RULE_ADMIN_REQUIRED,
+        check_str=base.SYSTEM_ADMIN,
+        scope_types=['system'],
         description='Update service.',
         operations=[{'path': '/v3/services/{service_id}',
-                     'method': 'PATCH'}]),
+                     'method': 'PATCH'}],
+        deprecated_rule=deprecated_update_service,
+        deprecated_reason=DEPRECATED_REASON,
+        deprecated_since=versionutils.deprecated.STEIN),
     policy.DocumentedRuleDefault(
         name=base.IDENTITY % 'delete_service',
-        check_str=base.RULE_ADMIN_REQUIRED,
+        check_str=base.SYSTEM_ADMIN,
+        scope_types=['system'],
         description='Delete service.',
         operations=[{'path': '/v3/services/{service_id}',
-                     'method': 'DELETE'}])
+                     'method': 'DELETE'}],
+        deprecated_rule=deprecated_delete_service,
+        deprecated_reason=DEPRECATED_REASON,
+        deprecated_since=versionutils.deprecated.STEIN)
 ]
 
 

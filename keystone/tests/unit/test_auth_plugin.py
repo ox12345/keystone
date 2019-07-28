@@ -15,7 +15,9 @@
 import uuid
 
 import mock
+import stevedore
 
+from keystone.api._shared import authentication
 from keystone import auth
 from keystone.auth.plugins import base
 from keystone.auth.plugins import mapped
@@ -26,16 +28,12 @@ from keystone.tests.unit.ksfixtures import auth_plugins
 
 # for testing purposes only
 METHOD_NAME = 'simple_challenge_response'
-METHOD_OPTS = {
-    METHOD_NAME:
-        'keystone.tests.unit.test_auth_plugin.SimpleChallengeResponse',
-}
 EXPECTED_RESPONSE = uuid.uuid4().hex
 DEMO_USER_ID = uuid.uuid4().hex
 
 
 class SimpleChallengeResponse(base.AuthMethodHandler):
-    def authenticate(self, context, auth_payload):
+    def authenticate(self, auth_payload):
         response_data = {}
         if 'response' in auth_payload:
             if auth_payload['response'] != EXPECTED_RESPONSE:
@@ -53,9 +51,6 @@ class SimpleChallengeResponse(base.AuthMethodHandler):
 
 
 class TestAuthPlugin(unit.SQLDriverOverrides, unit.TestCase):
-    def setUp(self):
-        super(TestAuthPlugin, self).setUp()
-        self.api = auth.controllers.Auth()
 
     def test_unsupported_auth_method(self):
         method_name = uuid.uuid4().hex
@@ -66,11 +61,19 @@ class TestAuthPlugin(unit.SQLDriverOverrides, unit.TestCase):
                           auth.core.AuthInfo.create,
                           auth_data)
 
-    def test_addition_auth_steps(self):
+    @mock.patch.object(auth.core, '_get_auth_driver_manager')
+    def test_addition_auth_steps(self, stevedore_mock):
+        simple_challenge_plugin = SimpleChallengeResponse()
+        extension = stevedore.extension.Extension(
+            name='simple_challenge', entry_point=None, plugin=None,
+            obj=simple_challenge_plugin
+        )
+        test_manager = stevedore.DriverManager.make_test_instance(extension)
+        stevedore_mock.return_value = test_manager
+
         self.useFixture(
             auth_plugins.ConfigAuthPlugins(self.config_fixture,
-                                           methods=[METHOD_NAME],
-                                           **METHOD_OPTS))
+                                           methods=[METHOD_NAME]))
         self.useFixture(auth_plugins.LoadAuthPlugins(METHOD_NAME))
 
         auth_data = {'methods': [METHOD_NAME]}
@@ -78,9 +81,10 @@ class TestAuthPlugin(unit.SQLDriverOverrides, unit.TestCase):
             'test': 'test'}
         auth_data = {'identity': auth_data}
         auth_info = auth.core.AuthInfo.create(auth_data)
-        auth_context = auth.core.AuthContext(extras={}, method_names=[])
+        auth_context = auth.core.AuthContext(method_names=[])
         try:
-            self.api.authenticate(self.make_request(), auth_info, auth_context)
+            with self.make_request():
+                authentication.authenticate(auth_info, auth_context)
         except exception.AdditionalAuthRequired as e:
             self.assertIn('methods', e.authentication)
             self.assertIn(METHOD_NAME, e.authentication['methods'])
@@ -93,8 +97,9 @@ class TestAuthPlugin(unit.SQLDriverOverrides, unit.TestCase):
             'response': EXPECTED_RESPONSE}
         auth_data = {'identity': auth_data}
         auth_info = auth.core.AuthInfo.create(auth_data)
-        auth_context = auth.core.AuthContext(extras={}, method_names=[])
-        self.api.authenticate(self.make_request(), auth_info, auth_context)
+        auth_context = auth.core.AuthContext(method_names=[])
+        with self.make_request():
+            authentication.authenticate(auth_info, auth_context)
         self.assertEqual(DEMO_USER_ID, auth_context['user_id'])
 
         # test incorrect response
@@ -103,12 +108,12 @@ class TestAuthPlugin(unit.SQLDriverOverrides, unit.TestCase):
             'response': uuid.uuid4().hex}
         auth_data = {'identity': auth_data}
         auth_info = auth.core.AuthInfo.create(auth_data)
-        auth_context = auth.core.AuthContext(extras={}, method_names=[])
-        self.assertRaises(exception.Unauthorized,
-                          self.api.authenticate,
-                          self.make_request(),
-                          auth_info,
-                          auth_context)
+        auth_context = auth.core.AuthContext(method_names=[])
+        with self.make_request():
+            self.assertRaises(exception.Unauthorized,
+                              authentication.authenticate,
+                              auth_info,
+                              auth_context)
 
     def test_duplicate_method(self):
         # Having the same method twice doesn't cause load_auth_methods to fail.
@@ -133,9 +138,6 @@ class TestAuthPluginDynamicOptions(TestAuthPlugin):
 
 
 class TestMapped(unit.TestCase):
-    def setUp(self):
-        super(TestMapped, self).setUp()
-        self.api = auth.controllers.Auth()
 
     def config_files(self):
         config_files = super(TestMapped, self).config_files()
@@ -146,7 +148,6 @@ class TestMapped(unit.TestCase):
         with mock.patch.object(auth.plugins.mapped.Mapped,
                                'authenticate',
                                return_value=None) as authenticate:
-            request = self.make_request()
             auth_data = {
                 'identity': {
                     'methods': [method_name],
@@ -155,13 +156,12 @@ class TestMapped(unit.TestCase):
             }
             auth_info = auth.core.AuthInfo.create(auth_data)
             auth_context = auth.core.AuthContext(
-                extras={},
                 method_names=[],
                 user_id=uuid.uuid4().hex)
-            self.api.authenticate(request, auth_info, auth_context)
+            with self.make_request():
+                authentication.authenticate(auth_info, auth_context)
             # make sure Mapped plugin got invoked with the correct payload
-            ((context, auth_payload),
-             kwargs) = authenticate.call_args
+            ((auth_payload,), kwargs) = authenticate.call_args
             self.assertEqual(method_name, auth_payload['protocol'])
 
     def test_mapped_with_remote_user(self):
@@ -173,7 +173,6 @@ class TestMapped(unit.TestCase):
         auth_data = {'identity': auth_data}
 
         auth_context = auth.core.AuthContext(
-            extras={},
             method_names=[],
             user_id=uuid.uuid4().hex)
 
@@ -183,30 +182,34 @@ class TestMapped(unit.TestCase):
                                'authenticate',
                                return_value=None) as authenticate:
             auth_info = auth.core.AuthInfo.create(auth_data)
-            request = self.make_request(environ={'REMOTE_USER': 'foo@idp.com'})
-            self.api.authenticate(request, auth_info, auth_context)
+            with self.make_request(environ={'REMOTE_USER': 'foo@idp.com'}):
+                authentication.authenticate(auth_info, auth_context)
             # make sure Mapped plugin got invoked with the correct payload
-            ((context, auth_payload),
-             kwargs) = authenticate.call_args
+            ((auth_payload,), kwargs) = authenticate.call_args
             self.assertEqual(method_name, auth_payload['protocol'])
 
-    def test_mapped_without_identity_provider_or_protocol(self):
-        test_mapped = mapped.Mapped()
-        test_mapped.resource_api = mock.Mock()
-        test_mapped.federation_api = mock.Mock()
-        test_mapped.identity_api = mock.Mock()
-        test_mapped.assignment_api = mock.Mock()
-        test_mapped.role_api = mock.Mock()
+    @mock.patch('keystone.auth.plugins.mapped.PROVIDERS')
+    def test_mapped_without_identity_provider_or_protocol(self,
+                                                          mock_providers):
+        mock_providers.resource_api = mock.Mock()
+        mock_providers.federation_api = mock.Mock()
+        mock_providers.identity_api = mock.Mock()
+        mock_providers.assignment_api = mock.Mock()
+        mock_providers.role_api = mock.Mock()
 
-        request = self.make_request()
+        test_mapped = mapped.Mapped()
 
         auth_payload = {'identity_provider': 'test_provider'}
-        self.assertRaises(exception.ValidationError, test_mapped.authenticate,
-                          request, auth_payload)
+        with self.make_request():
+            self.assertRaises(
+                exception.ValidationError, test_mapped.authenticate,
+                auth_payload)
 
         auth_payload = {'protocol': 'saml2'}
-        self.assertRaises(exception.ValidationError, test_mapped.authenticate,
-                          request, auth_payload)
+        with self.make_request():
+            self.assertRaises(
+                exception.ValidationError, test_mapped.authenticate,
+                auth_payload)
 
     def test_supporting_multiple_methods(self):
         method_names = ('saml2', 'openid', 'x509', 'mapped')

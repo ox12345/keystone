@@ -2,8 +2,8 @@
 Team and repository tags
 ========================
 
-.. image:: https://governance.openstack.org/badges/keystone.svg
-    :target: https://governance.openstack.org/reference/tags/index.html
+.. image:: https://governance.openstack.org/tc/badges/keystone.svg
+    :target: https://governance.openstack.org/tc/reference/tags/index.html
 
 .. Change things from this point on
 
@@ -23,11 +23,11 @@ published at:
 
 The API reference and documentation are available at:
 
-    https://developer.openstack.org/api-ref/identity
+    https://docs.openstack.org/api-ref/identity
 
 The canonical client library is available at:
 
-    https://git.openstack.org/cgit/openstack/python-keystoneclient
+    https://opendev.org/openstack/python-keystoneclient
 
 Documentation for cloud administrators is available at:
 
@@ -35,11 +35,15 @@ Documentation for cloud administrators is available at:
 
 The source of documentation for cloud administrators is available at:
 
-    https://git.openstack.org/cgit/openstack/openstack-manuals
+    https://opendev.org/openstack/openstack-manuals
 
 Information about our team meeting is available at:
 
     https://wiki.openstack.org/wiki/Meetings/KeystoneMeeting
+
+Release notes is available at:
+
+    https://docs.openstack.org/releasenotes/keystone
 
 Bugs and feature requests are tracked on Launchpad at:
 

@@ -12,8 +12,8 @@
 
 from oslo_log import log
 from six import text_type
-from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy import orm
+from sqlalchemy.sql import expression
 
 from keystone.common import driver_hints
 from keystone.common import sql
@@ -27,9 +27,6 @@ class Resource(base.ResourceDriverBase):
     # TODO(morgan): Merge all of this code into the manager, Resource backend
     # is only SQL. There is no configurable driver.
 
-    def default_assignment_driver(self):
-        return 'sql'
-
     def _encode_domain_id(self, ref):
         if 'domain_id' in ref and ref['domain_id'] is None:
             new_ref = ref.copy()
@@ -37,11 +34,6 @@ class Resource(base.ResourceDriverBase):
             return new_ref
         else:
             return ref
-
-    def _encode_tags(self, ref):
-        if ref.get('tags'):
-            ref['tags'] = [text_type(t) for t in ref['tags']]
-        return ref
 
     def _is_hidden_ref(self, ref):
         return ref.id == base.NULL_DOMAIN_ID
@@ -87,9 +79,9 @@ class Resource(base.ResourceDriverBase):
                 f['value'] = base.NULL_DOMAIN_ID
         with sql.session_for_read() as session:
             query = session.query(Project)
+            query = query.filter(Project.id != base.NULL_DOMAIN_ID)
             project_refs = sql.filter_limit_query(Project, query, hints)
-            return [project_ref.to_dict() for project_ref in project_refs
-                    if not self._is_hidden_ref(project_ref)]
+            return [project_ref.to_dict() for project_ref in project_refs]
 
     def list_projects_from_ids(self, ids):
         if not ids:
@@ -183,14 +175,17 @@ class Resource(base.ResourceDriverBase):
         with sql.session_for_read() as session:
             query = session.query(ProjectTag)
             if 'tags' in filters.keys():
-                filtered_ids += self._filter_ids_by_sorted_tags(
+                filtered_ids += self._filter_ids_by_tags(
                     query, filters['tags'].split(','))
             if 'tags-any' in filters.keys():
                 any_tags = filters['tags-any'].split(',')
                 subq = query.filter(ProjectTag.name.in_(any_tags))
-                filtered_ids += [ptag['project_id'] for ptag in subq]
+                any_tags = [ptag['project_id'] for ptag in subq]
+                if 'tags' in filters.keys():
+                    any_tags = set(any_tags) & set(filtered_ids)
+                filtered_ids = any_tags
             if 'not-tags' in filters.keys():
-                blacklist_ids = self._filter_ids_by_sorted_tags(
+                blacklist_ids = self._filter_ids_by_tags(
                     query, filters['not-tags'].split(','))
                 filtered_ids = self._filter_not_tags(session,
                                                      filtered_ids,
@@ -212,15 +207,14 @@ class Resource(base.ResourceDriverBase):
             return [project_ref.to_dict() for project_ref in query.all()
                     if not self._is_hidden_ref(project_ref)]
 
-    def _filter_ids_by_sorted_tags(self, query, tags):
+    def _filter_ids_by_tags(self, query, tags):
         filtered_ids = []
-        sorted_tags = sorted(tags)
-        subq = query.filter(ProjectTag.name.in_(sorted_tags))
+        subq = query.filter(ProjectTag.name.in_(tags))
         for ptag in subq:
             subq_tags = query.filter(ProjectTag.project_id ==
                                      ptag['project_id'])
             result = map(lambda x: x['name'], subq_tags.all())
-            if sorted(result) == sorted_tags:
+            if set(tags) <= set(result):
                 filtered_ids.append(ptag['project_id'])
         return filtered_ids
 
@@ -235,7 +229,6 @@ class Resource(base.ResourceDriverBase):
     @sql.handle_conflicts(conflict_type='project')
     def create_project(self, project_id, project):
         new_project = self._encode_domain_id(project)
-        new_project = self._encode_tags(new_project)
         with sql.session_for_write() as session:
             project_ref = Project.from_dict(new_project)
             session.add(project_ref)
@@ -252,7 +245,6 @@ class Resource(base.ResourceDriverBase):
             # When we read the old_project_dict, any "null" domain_id will have
             # been decoded, so we need to re-encode it
             old_project_dict = self._encode_domain_id(old_project_dict)
-            old_project_dict = self._encode_tags(old_project_dict)
             new_project = Project.from_dict(old_project_dict)
             for attr in Project.attributes:
                 if attr != 'id':
@@ -280,6 +272,67 @@ class Resource(base.ResourceDriverBase):
                     LOG.warning('Project %s does not exist and was not '
                                 'deleted.', project_id)
             query.delete(synchronize_session=False)
+
+    def check_project_depth(self, max_depth):
+        with sql.session_for_read() as session:
+            obj_list = []
+            # Using db table self outerjoin to find the project descendants.
+            #
+            # We'll only outerjoin the project table `max_depth` times to
+            # check whether current project tree exceed the max depth limit.
+            #
+            # For example:
+            #
+            # If max_depth is 2, we will take the outerjoin 2 times, then the
+            # SQL result may be like:
+            #
+            #  +---- +-------------+-------------+-------------+
+            #  | No. | project1_id | project2_id | project3_id |
+            #  +--- -+-------------+-------------+-------------+
+            #  |  1  |  domain_x   |             |             |
+            #  +- ---+-------------+-------------+-------------+
+            #  |  2  |  project_a  |             |             |
+            #  +- ---+-------------+-------------+-------------+
+            #  |  3  |  domain_y   |  project_a  |             |
+            #  +- ---+-------------+-------------+-------------+
+            #  |  4  |  project_b  |  project_c  |             |
+            #  +- ---+-------------+-------------+-------------+
+            #  |  5  |  domain_y   |  project_b  |  project_c  |
+            #  +- ---+-------------+-------------+-------------+
+            #
+            # `project1_id` column is the root. It is a project or a domain.
+            # If `project1_id` is a project, there must exist a line that
+            # `project1` is its domain.
+            #
+            # We got 5 lines here. It includes three scenarios:
+            #
+            # 1). The No.1 line means there is a domain `domain_x` which has no
+            #     children. The depth is 1.
+            #
+            # 2). The No.2 and No.3 lines mean project `project_a` has no child
+            # and its parent is domain `domain_y`. The depth is 2.
+            #
+            # 3). The No.4 and No.5 lines mean project `project_b` has a child
+            #     `project_c` and its parent is domain `domain_y`. The depth is
+            #     3. This tree hit the max depth
+            #
+            # So we can see that if column "project3_id" has value, it means
+            # some trees hit the max depth limit.
+
+            for _ in range(max_depth + 1):
+                obj_list.append(orm.aliased(Project))
+
+            query = session.query(*obj_list)
+
+            for index in range(max_depth):
+                query = query.outerjoin(
+                    obj_list[index + 1],
+                    obj_list[index].id == obj_list[index + 1].parent_id)
+            exceeded_lines = query.filter(
+                obj_list[-1].id != expression.null())
+
+            if exceeded_lines:
+                return [line[max_depth].id for line in exceeded_lines]
 
 
 class Project(sql.ModelBase, sql.ModelDictMixinWithExtras):
@@ -323,7 +376,7 @@ class Project(sql.ModelBase, sql.ModelDictMixinWithExtras):
     # rather than just only 'name' being unique
     __table_args__ = (sql.UniqueConstraint('domain_id', 'name'),)
 
-    @hybrid_property
+    @property
     def tags(self):
         if self._tags:
             return [tag.name for tag in self._tags]
@@ -335,13 +388,9 @@ class Project(sql.ModelBase, sql.ModelDictMixinWithExtras):
         for tag in values:
             tag_ref = ProjectTag()
             tag_ref.project_id = self.id
-            tag_ref.name = tag
+            tag_ref.name = text_type(tag)
             new_tags.append(tag_ref)
         self._tags = new_tags
-
-    @tags.expression
-    def tags(cls):
-        return ProjectTag.name
 
 
 class ProjectTag(sql.ModelBase, sql.ModelDictMixin):

@@ -10,18 +10,18 @@
 # Andreas Jaeger <jaegerandi@gmail.com>, 2016. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: keystone 12.0.0.0b4.dev8\n"
+"Project-Id-Version: keystone VERSION\n"
 "Report-Msgid-Bugs-To: https://bugs.launchpad.net/openstack-i18n/\n"
-"POT-Creation-Date: 2017-08-01 22:35+0000\n"
+"POT-Creation-Date: 2018-08-08 22:57+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "PO-Revision-Date: 2016-04-07 06:27+0000\n"
 "Last-Translator: Copied by Zanata <copied-by-zanata@zanata.org>\n"
-"Language: tr-TR\n"
+"Language: tr_TR\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 "Generated-By: Babel 2.0\n"
-"X-Generator: Zanata 3.9.6\n"
+"X-Generator: Zanata 4.3.3\n"
 "Language-Team: Turkish (Turkey)\n"
 
 #, python-format
@@ -181,18 +181,11 @@ msgstr "Kimlik Sağlayıcı tanımlayıcısı ortamda bulunamıyor"
 msgid "Could not validate the access token"
 msgstr "Erişim jetonu doğrulanamadı"
 
-msgid "Credential belongs to another user"
-msgstr "Kimlik bilgisi başka bir kullanıcıya ait"
-
 msgid ""
 "Disabling an entity where the 'enable' attribute is ignored by configuration."
 msgstr ""
 "'enable' özniteliği yapılandırma tarafından göz ardı edilen bir öğe "
 "kapatılıyor."
-
-#, python-format
-msgid "Domain (%s)"
-msgstr "Alan (%s)"
 
 #, python-format
 msgid "Domain cannot be named %s"
@@ -275,9 +268,6 @@ msgstr ""
 "\"remaining_uses\" alanı %(value)s olarak ayarlanmış, bir güvene tekrar "
 "yetki vermek için böyle ayarlanmamalı"
 
-msgid "Found invalid token: scoped to both project and domain."
-msgstr "Geçersiz jeton bulundu: hem proje hem alana kapsanmış."
-
 #, python-format
 msgid "Group %(group)s is not supported for domain specific configurations"
 msgstr "%(group)s grubu alana özel yapılandırmalar için desteklenmiyor"
@@ -328,10 +318,6 @@ msgstr "Geçersiz LDAP kapsamı: %(scope)s. Şunlardan birini seçin: %(options)
 msgid "Invalid TLS / LDAPS combination"
 msgstr "Geçersiz TLS / LDAPS kombinasyonu"
 
-#, python-format
-msgid "Invalid audit info data type: %(data)s (%(type)s)"
-msgstr "Geçersiz denetim bilgisi veri türü: %(data)s (%(type)s)"
-
 msgid "Invalid blob in credential"
 msgstr "Kimlik bilgisinde geçersiz düğüm"
 
@@ -342,9 +328,6 @@ msgid ""
 msgstr ""
 "Yapılandırma dosyası isminde: %(file)s geçersiz alan adı: %(domain)s bulundu "
 "- bu dosya atlanıyor."
-
-msgid "Invalid limit value"
-msgstr "Geçersiz sınır değeri"
 
 #, python-format
 msgid ""
@@ -368,9 +351,6 @@ msgid "Malformed endpoint URL (%(endpoint)s), see ERROR log for details."
 msgstr ""
 "Kusurlu bitiş noktası URL'si (%(endpoint)s), detaylar için HATA kaydına "
 "bakın."
-
-msgid "Marker could not be found"
-msgstr "İşaretçi bulunamadı"
 
 #, python-format
 msgid "Member %(member)s is already a member of group %(group)s"
@@ -412,9 +392,6 @@ msgstr "Hiçbir seçenek belirtilmedi"
 msgid "No policy is associated with endpoint %(endpoint_id)s."
 msgstr "Hiçbir ilke %(endpoint_id)s bitiş noktasıyla ilişkilendirilmemiş."
 
-msgid "Non-default domain is not supported"
-msgstr "Varsayılan olmayan alan desteklenmiyor"
-
 msgid "One of the trust agents is disabled or deleted"
 msgstr "Güven ajanlarından biri kapalı ya da silinmiş"
 
@@ -433,10 +410,6 @@ msgid ""
 msgstr ""
 "%(group)s grubundaki %(option)s seçeneği alana özel yapılandırmalarda "
 "desteklenmiyor"
-
-#, python-format
-msgid "Project (%s)"
-msgstr "Proje (%s)"
 
 msgid "Project field is required and cannot be empty."
 msgstr "Proje alanı gerekli ve boş olamaz."
@@ -457,16 +430,6 @@ msgid ""
 msgstr ""
 "izin verilen [0..%(max_count)d] aralığı içinden %(redelegation_depth)d izin "
 "verilen tekrar yetki verme derinliği"
-
-#, python-format
-msgid ""
-"Request attribute %(attribute)s must be less than or equal to %(size)i. The "
-"server could not comply with the request because the attribute size is "
-"invalid (too large). The client is assumed to be in error."
-msgstr ""
-"İstek özniteliği %(attribute)s %(size)i boyutuna eşit ya da daha küçük "
-"olmalı. Sunucu talebi yerine getiremedi çünkü öznitelik boyutu geçersiz (çok "
-"büyük). İstemcinin hata durumunda olduğu varsayılıyor."
 
 msgid "Request must have an origin query parameter"
 msgstr "İstek bir başlangıç noktası sorgu parametresine sahip olmalı"
@@ -594,9 +557,6 @@ msgstr ""
 "istek ya kusurlu ya da geçersiz. İstemcinin hata durumunda olduğu "
 "varsayılıyor."
 
-msgid "Token belongs to another user"
-msgstr "Jeton başka bir kullanıcıya ait"
-
 msgid "Trustee has no delegated roles."
 msgstr "Yedieminin emanet edilen kuralları yok."
 
@@ -666,9 +626,6 @@ msgstr "Beklenmedik atama türüyle karşılaşıldı, %s"
 msgid "Unexpected status requested for JSON Home response, %s"
 msgstr "JSON Home yanıtı için beklenmedik durum istendi, %s"
 
-msgid "Unknown Target"
-msgstr "Bilinmeyen Hedef"
-
 #, python-format
 msgid "Unknown domain '%(name)s' specified by --domain-name"
 msgstr "--domain-name ile bilinmeyen alan '%(name)s' belirtilmiş"
@@ -710,9 +667,6 @@ msgstr "Kullanıcı kapalı: %s"
 msgid "User is not a trustee."
 msgstr "Kullanıcı güvenilir değil."
 
-msgid "User roles not supported: tenant_id required"
-msgstr "Kullanıcı rolleri desteklenmiyor: tenant_id gerekli"
-
 #, python-format
 msgid "User type %s not supported"
 msgstr "Kullanıcı türü %s desteklenmiyor"
@@ -736,10 +690,6 @@ msgstr "kapalı bir proje içeren bir alt grupta proje oluşturulamaz: %s"
 #, python-format
 msgid "group %(group)s"
 msgstr "grup %(group)s"
-
-#, python-format
-msgid "invalid date format %s"
-msgstr "geçersiz tarih biçimi %s"
 
 #, python-format
 msgid "option %(option)s in group %(group)s"
@@ -769,7 +719,3 @@ msgstr "tls_cacertdir %s bulunamadı ya da bir dizin"
 #, python-format
 msgid "tls_cacertfile %s not found or is not a file"
 msgstr "tls_cacertfile %s bulunamadı ya da bir dosya değil"
-
-#, python-format
-msgid "token reference must be a KeystoneToken type, got: %s"
-msgstr "jeton referansı bir KeystoneToken türünde olmalı, alınan: %s"

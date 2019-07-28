@@ -14,6 +14,7 @@ from oslo_policy import policy
 
 IDENTITY = 'identity:%s'
 RULE_ADMIN_REQUIRED = 'rule:admin_required'
+RULE_OWNER = 'user_id:%(user_id)s'
 RULE_ADMIN_OR_OWNER = 'rule:admin_or_owner'
 RULE_ADMIN_OR_CREDENTIAL_OWNER = (
     'rule:admin_required or '
@@ -24,12 +25,30 @@ RULE_ADMIN_OR_TARGET_DOMAIN = (
 RULE_ADMIN_OR_TARGET_PROJECT = (
     'rule:admin_required or '
     'project_id:%(target.project.id)s')
-RULE_ADMIN_OR_TOKEN_SUBJECT = 'rule:admin_or_token_subject'
+RULE_ADMIN_OR_TOKEN_SUBJECT = 'rule:admin_or_token_subject'  # nosec
 RULE_REVOKE_EVENT_OR_ADMIN = 'rule:revoke_event_or_admin'
-RULE_SERVICE_ADMIN_OR_TOKEN_SUBJECT = 'rule:service_admin_or_token_subject'
+RULE_SERVICE_ADMIN_OR_TOKEN_SUBJECT = (
+    'rule:service_admin_or_token_subject')  # nosec
 RULE_SERVICE_OR_ADMIN = 'rule:service_or_admin'
 RULE_TRUST_OWNER = 'user_id:%(trust.trustor_user_id)s'
 
+# We are explicitly setting system_scope:all in these check strings because
+# they provide backwards compatibility in the event a deployment sets
+# ``keystone.conf [oslo_policy] enforce_scope = False``, which the default.
+# Otherwise, this might open up APIs to be more permissive unintentionally if a
+# deployment isn't enforcing scope. For example, the identity:get_endpoint
+# policy might be ``rule:admin_required`` today and eventually ``role:reader``
+# enforcing system scoped tokens. Until enforce_scope=True by default, it would
+# be possible for users with the ``reader`` role on a project to access an API
+# traditionally reserved for system administrators. Once keystone defaults
+# ``keystone.conf [oslo_policy] enforce_scope=True``, the ``system_scope:all``
+# bits of these check strings can be removed since that will be handled
+# automatically by scope_types in oslo.policy's RuleDefault objects.
+SYSTEM_READER = 'role:reader and system_scope:all'
+SYSTEM_ADMIN = 'role:admin and system_scope:all'
+DOMAIN_READER = 'role:reader and domain_id:%(target.domain_id)s'
+RULE_SYSTEM_ADMIN_OR_OWNER = '(' + SYSTEM_ADMIN + ') or rule:owner'
+RULE_SYSTEM_READER_OR_OWNER = '(' + SYSTEM_READER + ') or rule:owner'
 
 rules = [
     policy.RuleDefault(
@@ -43,7 +62,7 @@ rules = [
         check_str='rule:admin_required or rule:service_role'),
     policy.RuleDefault(
         name='owner',
-        check_str='user_id:%(user_id)s'),
+        check_str=RULE_OWNER),
     policy.RuleDefault(
         name='admin_or_owner',
         check_str='rule:admin_required or rule:owner'),
